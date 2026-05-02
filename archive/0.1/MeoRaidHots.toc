@@ -1,0 +1,6 @@
+## Interface: 120001
+## Title: Meo Raid Hots
+## Notes: Enlarge useful Hot icons on Blizzard raid frames
+## Version: 0.1
+
+MeoRaidHots.lua

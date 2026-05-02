@@ -1,0 +1,29 @@
+# OS/editor noise
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# World of Warcraft local/runtime files
+WTF/
+Cache/
+Logs/
+Errors/
+Screenshots/
+*.bak
+*.tmp
+
+# Packaged addon archives
+*.zip
+*.7z
+*.rar
+
+# Lua tooling output
+luac.out
+coverage/
+.luacov
+.luacheckcache
