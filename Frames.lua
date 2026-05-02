@@ -86,6 +86,10 @@ local function Raise(unitFrame, button)
   if type(button.SetFrameStrata) == "function" then
     button:SetFrameStrata("HIGH")
   end
+
+  if button.cooldown and type(button.cooldown.SetFrameLevel) == "function" then
+    button.cooldown:SetFrameLevel(button:GetFrameLevel() + 1)
+  end
 end
 
 local function GetStore(store, moduleKey, unitFrame)
@@ -139,21 +143,31 @@ local function ConfigureButton(unitFrame, button, index, config)
 
   button:ClearAllPoints()
   button:SetPoint(config.point or "BOTTOMRIGHT", anchor, config.relativePoint or config.point or "BOTTOMRIGHT", xOffset, yOffset)
+
+  if button.cooldown and type(button.cooldown.SetHideCountdownNumbers) == "function" then
+    button.cooldown:SetHideCountdownNumbers(not config.cooldownText)
+  end
 end
 
 local function CreateButton(moduleKey, unitFrame, index, config)
   local button = CreateFrame("Frame", nil, unitFrame)
   button.moduleKey = moduleKey
 
-  button.icon = button:CreateTexture(nil, "OVERLAY")
+  button.icon = button:CreateTexture(nil, "ARTWORK")
   button.icon:SetAllPoints(button)
   button.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 
   button.cooldown = CreateFrame("Cooldown", nil, button, "CooldownFrameTemplate")
   button.cooldown:SetAllPoints(button)
+  if type(button.cooldown.SetDrawSwipe) == "function" then
+    button.cooldown:SetDrawSwipe(true)
+  end
   button.cooldown:SetDrawEdge(false)
+  if type(button.cooldown.SetSwipeColor) == "function" then
+    button.cooldown:SetSwipeColor(0, 0, 0, 0.65)
+  end
   if type(button.cooldown.SetHideCountdownNumbers) == "function" then
-    button.cooldown:SetHideCountdownNumbers(true)
+    button.cooldown:SetHideCountdownNumbers(not config.cooldownText)
   end
   button.cooldown:SetReverse(true)
 
@@ -220,6 +234,9 @@ function Frames.RenderAuras(moduleKey, unitFrame, unit, options)
     anchorFrame = options.anchorFrame,
     coverWidth = options.coverWidth,
     coverHeight = options.coverHeight,
+    cooldownFallback = options.cooldownFallback,
+    cooldownReplay = options.cooldownReplay,
+    cooldownText = options.cooldownText,
   }
 
   local buttons = EnsureButtons(moduleKey, unitFrame, config)
@@ -245,8 +262,18 @@ function Frames.RenderAuras(moduleKey, unitFrame, unit, options)
         local okCooldown = pcall(function()
           local duration = ns.Auras.SafeField(aura, "duration")
           local expirationTime = ns.Auras.SafeField(aura, "expirationTime")
+          if (type(duration) ~= "number" or type(expirationTime) ~= "number" or duration <= 0) and type(config.cooldownFallback) == "function" then
+            local fallbackStart, fallbackDuration = config.cooldownFallback(unitFrame, iconIndex, aura)
+            if type(fallbackStart) == "number" and type(fallbackDuration) == "number" and fallbackDuration > 0 then
+              duration = fallbackDuration
+              expirationTime = fallbackStart + fallbackDuration
+            end
+          end
+
           if type(duration) == "number" and type(expirationTime) == "number" and duration > 0 then
             button.cooldown:SetCooldown(expirationTime - duration, duration)
+            button.cooldown:Show()
+          elseif type(config.cooldownReplay) == "function" and config.cooldownReplay(unitFrame, iconIndex, aura, button.cooldown, unit) then
             button.cooldown:Show()
           else
             button.cooldown:Hide()

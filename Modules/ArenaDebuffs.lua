@@ -3,64 +3,73 @@ local _, ns = ...
 local ArenaDebuffs = {}
 ns.ArenaDebuffs = ArenaDebuffs
 
-local function ConfigureAuraButton(button, size)
-  if not button or type(button.SetSize) ~= "function" then
+local function GetOptions()
+  local settings = ns.GetSettings("arenaDebuffs")
+  return {
+    filter = "HARMFUL",
+    categories = ns.GetEnabledCategories({ "dots", "utility" }),
+    onlyPlayer = settings.onlyPlayer,
+    iconSize = settings.iconSize,
+    maxIcons = settings.maxIcons,
+    maxScan = 40,
+    cooldownText = settings.cooldownText,
+    requireDuration = false,
+    preferLegacy = true,
+    allowRestrictedAura = true,
+    point = "TOPRIGHT",
+    relativePoint = "TOPRIGHT",
+    growth = "LEFT",
+    x = -1,
+    y = 1,
+    backingAlpha = 0.75,
+    anchorFrame = function(unitFrame)
+      return unitFrame.healthBar or unitFrame
+    end,
+  }
+end
+
+local function GetArenaFrame(index)
+  return _G["ArenaEnemyFrame" .. index] or _G["ArenaEnemyFrame" .. index .. "UnitFrame"] or _G["CompactArenaFrameMember" .. index]
+end
+
+local function AddAuraContainer(containers, seen, frame)
+  if frame and type(frame) == "table" and not seen[frame] then
+    seen[frame] = true
+    containers[#containers + 1] = frame
+  end
+end
+
+local function GetAuraContainers(unitFrame)
+  local containers = {}
+  local seen = {}
+
+  AddAuraContainer(containers, seen, unitFrame and unitFrame.AurasFrame)
+  AddAuraContainer(containers, seen, unitFrame and unitFrame.BuffFrame)
+  AddAuraContainer(containers, seen, unitFrame and unitFrame.DebuffFrame)
+  AddAuraContainer(containers, seen, unitFrame and unitFrame.buffFrame)
+  AddAuraContainer(containers, seen, unitFrame and unitFrame.debuffFrame)
+
+  return containers
+end
+
+local function SetBlizzardAurasShown(unitFrame, shown)
+  if not unitFrame or ns.Frames.IsForbidden(unitFrame) then
     return
   end
 
-  pcall(button.SetSize, button, size, size)
-  pcall(button.SetScale, button, 1)
-
-  local icon = button.icon or button.Icon
-  if icon and type(icon.SetAllPoints) == "function" then
-    pcall(icon.ClearAllPoints, icon)
-    pcall(icon.SetAllPoints, icon, button)
-  end
-
-  local cooldown = button.cooldown or button.Cooldown
-  if cooldown and type(cooldown.SetAllPoints) == "function" then
-    pcall(cooldown.SetAllPoints, cooldown, button)
-    pcall(cooldown.Show, cooldown)
-  end
-end
-
-local function IsCooldownFrame(frame)
-  if not frame or type(frame.GetObjectType) ~= "function" then
-    return false
-  end
-
-  local ok, objectType = pcall(frame.GetObjectType, frame)
-  return ok and objectType == "Cooldown"
-end
-
-local function HasAuraIcon(button)
-  if not button or IsCooldownFrame(button) then
-    return false
-  end
-
-  if button.icon or button.Icon or button.texture or button.Texture then
-    return true
-  end
-
-  if type(button.GetRegions) ~= "function" then
-    return false
-  end
-
-  local regions = { button:GetRegions() }
-  for _, region in ipairs(regions) do
-    if region and type(region.GetObjectType) == "function" then
-      local ok, objectType = pcall(region.GetObjectType, region)
-      if ok and objectType == "Texture" then
-        return true
-      end
+  for _, auraFrame in ipairs(GetAuraContainers(unitFrame)) do
+    if shown then
+      pcall(auraFrame.SetAlpha, auraFrame, 1)
+      pcall(auraFrame.Show, auraFrame)
+    else
+      pcall(auraFrame.SetAlpha, auraFrame, 0)
+      pcall(auraFrame.Hide, auraFrame)
     end
   end
-
-  return false
 end
 
 local function AddAuraButton(buttons, seen, button)
-  if not HasAuraIcon(button) or seen[button] then
+  if type(button) ~= "table" or seen[button] then
     return
   end
 
@@ -82,105 +91,119 @@ local function CollectAuraButtons(frame, buttons, depth)
   end
 end
 
-local function AddAuraButtonTable(buttons, source)
-  if type(source) ~= "table" then
-    return
-  end
-
-  for _, button in pairs(source) do
-    if type(button) == "table" and type(button.IsShown) == "function" then
-      AddAuraButton(buttons, buttons.seen, button)
+local function AddKnownAuraButtons(unitFrame, auraFrame, buttons)
+  if type(auraFrame) == "table" then
+    for _, source in ipairs({ auraFrame.buffFrames, auraFrame.debuffFrames, auraFrame.auraFrames }) do
+      if type(source) == "table" then
+        for _, button in pairs(source) do
+          AddAuraButton(buttons, buttons.seen, button)
+        end
+      end
     end
   end
-end
 
-local function GetOptions()
-  local settings = ns.GetSettings("arenaDebuffs")
-  return {
-    filter = "HARMFUL",
-    categories = ns.GetEnabledCategories({ "dots", "utility" }),
-    onlyPlayer = settings.onlyPlayer,
-    iconSize = settings.iconSize,
-    maxIcons = settings.maxIcons,
-    maxScan = 40,
-    point = "TOPRIGHT",
-    relativePoint = "TOPRIGHT",
-    growth = "LEFT",
-    x = -1,
-    y = 1,
-  }
-end
-
-local function GetArenaFrame(index)
-  return _G["ArenaEnemyFrame" .. index] or _G["ArenaEnemyFrame" .. index .. "UnitFrame"] or _G["CompactArenaFrameMember" .. index]
-end
-
-local function StyleArenaAuras(unitFrame)
-  if not unitFrame or ns.Frames.IsForbidden(unitFrame) then
-    return
-  end
-
-  local settings = ns.GetSettings("arenaDebuffs")
-  if not settings.enabled then
-    ns.Frames.Clear("arenaDebuffs", unitFrame)
-    return
-  end
-
-  local size = settings.iconSize
-  local maxIcons = settings.maxIcons
-  local spacing = 0
-  local anchor = unitFrame.healthBar or unitFrame
-  local auraFrame = unitFrame.AurasFrame or unitFrame
-
-  ns.Frames.Clear("arenaDebuffs", unitFrame)
-
-  pcall(auraFrame.SetAlpha, auraFrame, 1)
-  pcall(auraFrame.Show, auraFrame)
-  pcall(auraFrame.ClearAllPoints, auraFrame)
-  pcall(auraFrame.SetPoint, auraFrame, "TOPRIGHT", anchor, "TOPRIGHT", -1, 1)
-  pcall(auraFrame.SetSize, auraFrame, maxIcons * size, size)
-  pcall(auraFrame.SetFrameLevel, auraFrame, (type(unitFrame.GetFrameLevel) == "function" and unitFrame:GetFrameLevel() or 0) + 100)
-  pcall(auraFrame.SetFrameStrata, auraFrame, "HIGH")
-
-  local buttons = { seen = {} }
-  AddAuraButtonTable(buttons, unitFrame.buffFrames)
-  AddAuraButtonTable(buttons, unitFrame.debuffFrames)
-  AddAuraButtonTable(buttons, unitFrame.auraFrames)
-  AddAuraButtonTable(buttons, auraFrame.buffFrames)
-  AddAuraButtonTable(buttons, auraFrame.debuffFrames)
-  AddAuraButtonTable(buttons, auraFrame.auraFrames)
-  CollectAuraButtons(auraFrame, buttons, 1)
-
-  local styled = 0
-  for _, child in ipairs(buttons) do
-    local okShown, shown = false, false
-    if child and type(child.IsShown) == "function" then
-      okShown, shown = pcall(child.IsShown, child)
-    end
-
-    if child and okShown and shown == true then
-      styled = styled + 1
-      ConfigureAuraButton(child, size)
-      pcall(child.ClearAllPoints, child)
-      pcall(child.SetPoint, child, "TOPRIGHT", auraFrame, "TOPRIGHT", -((styled - 1) * (size + spacing)), 0)
-
-      if styled > maxIcons then
-        pcall(child.Hide, child)
+  if type(unitFrame) == "table" then
+    for _, source in ipairs({ unitFrame.buffFrames, unitFrame.debuffFrames, unitFrame.auraFrames }) do
+      if type(source) == "table" then
+        for _, button in pairs(source) do
+          AddAuraButton(buttons, buttons.seen, button)
+        end
       end
     end
   end
 end
 
-local function ScheduleStyleArena(unitFrame)
+local function IsArenaDebuffButton(button)
+  if type(button) ~= "table" then
+    return false
+  end
+
+  local ok, isBuff = pcall(function()
+    return button.isBuff
+  end)
+  if ok and isBuff == true then
+    return false
+  end
+
+  local unitToken = ns.Auras.SafeField(button, "unitToken")
+  local auraInstanceID = ns.Auras.SafeField(button, "auraInstanceID")
+  local spellID = ns.Auras.SafeField(button, "spellID") or ns.Auras.SafeField(button, "spellId")
+  local hasCooldown = ns.Auras.SafeField(button, "cooldown") or ns.Auras.SafeField(button, "Cooldown") or ns.Auras.SafeField(button, "CooldownFrame")
+  local hasIcon = ns.Auras.SafeField(button, "Icon") or ns.Auras.SafeField(button, "icon")
+
+  return type(unitToken) == "string" and type(hasCooldown) == "table" and hasIcon ~= nil
+end
+
+local function StyleArenaAuraButton(button, size, cooldownText)
+  if type(button) ~= "table" then
+    return
+  end
+
+  local scale = 1
+  if type(size) == "number" and size > 0 then
+    scale = size / 12
+  end
+
+  if type(button.SetScale) == "function" then
+    pcall(button.SetScale, button, scale)
+  end
+
+  if type(button.SetFrameLevel) == "function" and type(button.GetParent) == "function" then
+    local okParent, parent = pcall(button.GetParent, button)
+    local parentLevel = okParent and type(parent) == "table" and type(parent.GetFrameLevel) == "function" and parent:GetFrameLevel() or 0
+    pcall(button.SetFrameLevel, button, parentLevel + 10)
+  end
+
+  local cooldown = button.cooldown or button.Cooldown or button.CooldownFrame
+  if cooldown and type(cooldown.SetHideCountdownNumbers) == "function" then
+    pcall(cooldown.SetHideCountdownNumbers, cooldown, not cooldownText)
+  end
+end
+
+local function StyleArenaAuras(unitFrame)
+  local settings = ns.GetSettings("arenaDebuffs")
+  local auraFrame = unitFrame and unitFrame.AurasFrame
+  if not auraFrame then
+    return 0
+  end
+
+  local buttons = { seen = {} }
+  AddKnownAuraButtons(unitFrame, auraFrame, buttons)
+  CollectAuraButtons(auraFrame, buttons, 1)
+
+  local styled = 0
+  for _, button in ipairs(buttons) do
+    if IsArenaDebuffButton(button) then
+      StyleArenaAuraButton(button, settings.iconSize, settings.cooldownText)
+      styled = styled + 1
+    end
+  end
+
+  SetBlizzardAurasShown(unitFrame, true)
+  return styled
+end
+
+local function RenderArenaAuras(unitFrame, unit)
+  if not ns.GetSettings("arenaDebuffs").enabled then
+    ns.Frames.Clear("arenaDebuffs", unitFrame)
+    SetBlizzardAurasShown(unitFrame, true)
+    return
+  end
+
+  ns.Frames.Clear("arenaDebuffs", unitFrame)
   StyleArenaAuras(unitFrame)
+end
+
+local function ScheduleRenderArena(unitFrame, unit)
+  RenderArenaAuras(unitFrame, unit)
   C_Timer.After(0, function()
-    StyleArenaAuras(unitFrame)
+    RenderArenaAuras(unitFrame, unit)
   end)
   C_Timer.After(0.05, function()
-    StyleArenaAuras(unitFrame)
+    RenderArenaAuras(unitFrame, unit)
   end)
   C_Timer.After(0.15, function()
-    StyleArenaAuras(unitFrame)
+    RenderArenaAuras(unitFrame, unit)
   end)
 end
 
@@ -197,10 +220,11 @@ function ArenaDebuffs:UpdateUnit(unit)
 
   if not ns.GetSettings("arenaDebuffs").enabled then
     ns.Frames.Clear("arenaDebuffs", unitFrame)
+    SetBlizzardAurasShown(unitFrame, true)
     return
   end
 
-  ScheduleStyleArena(unitFrame)
+  ScheduleRenderArena(unitFrame, unit)
 end
 
 function ArenaDebuffs:UpdateAll()
@@ -265,6 +289,52 @@ local function DebugOutput(lines)
   return table.concat(safeLines, "\n")
 end
 
+local function DumpFrameInfo(lines, label, frame, depth)
+  if depth > 3 then
+    return
+  end
+
+  local indent = string.rep("  ", depth)
+  AppendLine(lines, indent .. label .. ":")
+  AppendLine(lines, indent .. "  name:", ns.Frames.SafeName(frame))
+  AppendLine(lines, indent .. "  type:", type(frame))
+  if type(frame) ~= "table" then
+    return
+  end
+
+  local fields = {
+    "isBuff",
+    "layoutIndex",
+    "auraInstanceID",
+    "unitToken",
+    "spellID",
+    "spellId",
+    "name",
+  }
+
+  for _, field in ipairs(fields) do
+    local value = ns.Auras.SafeField(frame, field)
+    if value ~= nil then
+      AppendLine(lines, indent .. "  " .. field .. ":", ns.Auras.SafeText(value))
+    end
+  end
+
+  local cooldown = ns.Auras.SafeField(frame, "cooldown") or ns.Auras.SafeField(frame, "Cooldown") or ns.Auras.SafeField(frame, "CooldownFrame")
+  AppendLine(lines, indent .. "  hasCooldown:", tostring(cooldown ~= nil))
+  AppendLine(lines, indent .. "  hasIcon:", tostring(ns.Auras.SafeField(frame, "Icon") ~= nil or ns.Auras.SafeField(frame, "icon") ~= nil))
+  AppendLine(lines, indent .. "  cooldownType:", cooldown and type(cooldown) or "nil")
+
+  if type(frame.GetChildren) ~= "function" then
+    return
+  end
+
+  local children = { frame:GetChildren() }
+  AppendLine(lines, indent .. "  children:", #children)
+  for index, child in ipairs(children) do
+    DumpFrameInfo(lines, "child " .. index, child, depth + 1)
+  end
+end
+
 local function DescribeUnitAuras(lines, unit)
   AppendLine(lines, "== unit", unit, "==")
   AppendLine(lines, "UnitExists:", tostring(UnitExists(unit)))
@@ -288,7 +358,7 @@ local function DescribeUnitAuras(lines, unit)
     end
 
     local options = GetOptions()
-    AppendLine(lines, "  harmful", auraIndex, "name=", ns.Auras.SafeText(ns.Auras.SafeField(aura, "name") or "nil"), "spellId=", ns.Auras.SafeText(ns.Auras.SafeField(aura, "spellId") or "nil"), "icon=", tostring(ns.Auras.HasIcon(aura)), "duration=", tostring(ns.Auras.HasDuration(aura)), "player=", tostring(ns.Auras.IsPlayerAura(aura)), "deny=", tostring(ns.Auras.IsDenylisted(aura)), "restrictedFallback=", tostring(options.allowRestrictedPlayerAura and ns.Auras.IsPlayerAura(aura)), "match=", tostring(ns.Auras.Matches(aura, options)))
+    AppendLine(lines, "  harmful", auraIndex, "name=", ns.Auras.SafeText(ns.Auras.SafeField(aura, "name") or "nil"), "spellId=", ns.Auras.SafeText(ns.Auras.SafeField(aura, "spellId") or "nil"), "icon=", tostring(ns.Auras.HasIcon(aura)), "duration=", tostring(ns.Auras.HasDuration(aura)), "player=", tostring(ns.Auras.IsPlayerAura(aura)), "deny=", tostring(ns.Auras.IsDenylisted(aura)), "restrictedFallback=", tostring(options.allowRestrictedAura), "match=", tostring(ns.Auras.Matches(aura, options)))
   end
   AppendLine(lines, "harmful scanned:", seen, "matched:", matched)
 end
@@ -317,6 +387,8 @@ function ArenaDebuffs:Debug()
     AppendLine(lines, "UnitExists:", tostring(UnitExists(unit)))
     if UnitExists(unit) then
       AppendLine(lines, "UnitCanAttack:", tostring(UnitCanAttack and UnitCanAttack("player", unit)))
+      DumpFrameInfo(lines, "frame tree", frame, 0)
+      DumpFrameInfo(lines, "auras tree", frame and frame.AurasFrame, 0)
     end
   end
 

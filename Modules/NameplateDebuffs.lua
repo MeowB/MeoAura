@@ -5,7 +5,33 @@ ns.NameplateDebuffs = NameplateDebuffs
 
 local unitsByFrame = setmetatable({}, { __mode = "k" })
 local framesByUnit = {}
+local nativeCooldownsByFrame = setmetatable({}, { __mode = "k" })
+local nativeCooldownsByUnit = {}
+local lastNativeCooldownByUnit = {}
+local lastNativeCooldownByFrame = setmetatable({}, { __mode = "k" })
+local lastUnresolvedNativeCooldown
+local replayedCooldownsByFrame = setmetatable({}, { __mode = "k" })
+local replayedCooldownsByUnit = {}
+local hookedNativeCooldowns = setmetatable({}, { __mode = "k" })
+local nativeCooldownButtons = setmetatable({}, { __mode = "k" })
+local nativeCooldownUnits = setmetatable({}, { __mode = "k" })
 local compactAuraHooked = false
+local cooldownFrameSetHooked = false
+local cooldownMixinHooked = false
+local ReplayNativeCooldown
+local ScheduleStyle
+local cooldownCaptureStats = {
+  calls = 0,
+  noParent = 0,
+  noUnit = 0,
+  nonNameplate = 0,
+  stored = 0,
+  storedExact = 0,
+  refreshed = 0,
+  discovered = 0,
+  mapped = 0,
+  unresolved = 0,
+}
 
 local function GetOptions()
   local settings = ns.GetSettings("nameplateDebuffs")
@@ -16,14 +42,18 @@ local function GetOptions()
     iconSize = settings.iconSize,
     maxIcons = settings.maxIcons,
     maxScan = 40,
+    cooldownText = settings.cooldownText,
     requireDuration = false,
     preferLegacy = true,
+    includeNameplateOnly = true,
+    allowRestrictedAura = true,
     point = "BOTTOMLEFT",
     relativePoint = "TOPLEFT",
     growth = "RIGHT",
     x = 0,
     y = 2,
     backingAlpha = 0.75,
+    cooldownReplay = ReplayNativeCooldown,
     anchorFrame = function(unitFrame)
       return unitFrame.healthBar or unitFrame
     end,
@@ -37,10 +67,10 @@ local function GetFriendlyHotOptions()
     categories = ns.GetEnabledCategories({ "hots", "externals", "utility" }),
     onlyPlayer = true,
     requirePlayerSource = true,
-    requirePlayerGUID = true,
     iconSize = settings.iconSize,
     maxIcons = settings.maxIcons,
     maxScan = 40,
+    cooldownText = settings.cooldownText,
     preferLegacy = true,
     point = "BOTTOMLEFT",
     relativePoint = "TOPLEFT",
@@ -55,6 +85,10 @@ local function GetFriendlyHotOptions()
 end
 
 local function GetNamePlateUnitFrame(unit)
+  if type(unit) ~= "string" or not string.match(unit, "^nameplate%d+$") then
+    return nil
+  end
+
   if not C_NamePlate or not C_NamePlate.GetNamePlateForUnit then
     return nil
   end
@@ -97,38 +131,11 @@ local function SetBlizzardAurasShown(unitFrame, shown)
   end
 
   if shown then
-    auraFrame:SetAlpha(1)
-    auraFrame:Show()
+    pcall(auraFrame.SetAlpha, auraFrame, 1)
+    pcall(auraFrame.Show, auraFrame)
   else
-    auraFrame:SetAlpha(0)
-    auraFrame:Hide()
-  end
-end
-
-local function ConfigureAuraButton(button, size)
-  if not button or type(button.SetSize) ~= "function" then
-    return
-  end
-
-  pcall(button.SetSize, button, size, size)
-  pcall(button.SetScale, button, 1)
-
-  local icon = button.icon or button.Icon
-  if icon and type(icon.SetAllPoints) == "function" then
-    pcall(icon.ClearAllPoints, icon)
-    pcall(icon.SetAllPoints, icon, button)
-  end
-
-  local cooldown = button.cooldown or button.Cooldown
-  if cooldown and type(cooldown.SetAllPoints) == "function" then
-    pcall(cooldown.SetAllPoints, cooldown, button)
-    pcall(cooldown.Show, cooldown)
-  end
-
-  local count = button.count or button.Count
-  if count and type(count.SetPoint) == "function" then
-    pcall(count.ClearAllPoints, count)
-    pcall(count.SetPoint, count, "BOTTOMRIGHT", button, "BOTTOMRIGHT", 1, -1)
+    pcall(auraFrame.SetAlpha, auraFrame, 0)
+    pcall(auraFrame.Show, auraFrame)
   end
 end
 
@@ -215,78 +222,362 @@ local function AddKnownAuraButtons(unitFrame, auraFrame, buttons)
   AddAuraButtonTable(buttons, unitFrame and unitFrame.auraFrames)
 end
 
-local function StyleBlizzardAuras(unitFrame)
-  local auraFrame = unitFrame and unitFrame.AurasFrame
-  if not auraFrame or ns.Frames.IsForbidden(unitFrame) then
+local function IsNativeDebuffButton(button)
+  if type(button) ~= "table" then
+    return false
+  end
+
+  local ok, isBuff = pcall(function()
+    return button.isBuff
+  end)
+  return ok and isBuff ~= true
+end
+
+local function StyleNativeAuraButton(button, size)
+  if type(button) ~= "table" then
     return
   end
 
+  local scale = 1
+  if type(size) == "number" and size > 0 then
+    scale = size / 12
+  end
+
+  if type(button.SetScale) == "function" then
+    pcall(button.SetScale, button, scale)
+  end
+
+  if type(button.SetFrameLevel) == "function" and type(button.GetParent) == "function" then
+    local okParent, parent = pcall(button.GetParent, button)
+    local parentLevel = okParent and type(parent) == "table" and type(parent.GetFrameLevel) == "function" and parent:GetFrameLevel() or 0
+    pcall(button.SetFrameLevel, button, parentLevel + 10)
+  end
+
+  local cooldown = button.cooldown or button.Cooldown or button.CooldownFrame
+  if cooldown and type(cooldown.SetHideCountdownNumbers) == "function" then
+    pcall(cooldown.SetHideCountdownNumbers, cooldown, not ns.GetSettings("nameplateDebuffs").cooldownText)
+  end
+end
+
+local function StyleNativeAuraButtons(unitFrame)
   local settings = ns.GetSettings("nameplateDebuffs")
-  if not settings.enabled then
-    SetBlizzardAurasShown(unitFrame, true)
+  local auraFrame = unitFrame and unitFrame.AurasFrame
+  if not auraFrame then
     return
   end
 
-  local size = settings.iconSize
-  local maxIcons = settings.maxIcons
-  local spacing = 0
-  local anchor = unitFrame.healthBar or unitFrame
+  local buttons = { seen = {} }
+  AddKnownAuraButtons(unitFrame, auraFrame, buttons)
+  CollectAuraButtons(auraFrame, buttons, 1)
 
-  ns.Frames.Clear("nameplateDebuffs", unitFrame)
-
-  unitFrame.auraSize = size
-  unitFrame.maxBuffs = maxIcons
-  unitFrame.maxDebuffs = maxIcons
-  if type(unitFrame.optionTable) == "table" then
-    unitFrame.optionTable.auraSize = size
-    unitFrame.optionTable.buffSize = size
-    unitFrame.optionTable.debuffSize = size
-    unitFrame.optionTable.maxBuffs = maxIcons
-    unitFrame.optionTable.maxDebuffs = maxIcons
+  for _, button in ipairs(buttons) do
+    if IsNativeDebuffButton(button) then
+      StyleNativeAuraButton(button, settings.iconSize)
+    end
   end
-  auraFrame.auraSize = size
-  auraFrame.buffSize = size
-  auraFrame.debuffSize = size
-  auraFrame.maxBuffs = maxIcons
-  auraFrame.maxDebuffs = maxIcons
 
-  pcall(auraFrame.SetAlpha, auraFrame, 1)
-  pcall(auraFrame.Show, auraFrame)
-  pcall(auraFrame.ClearAllPoints, auraFrame)
-  pcall(auraFrame.SetPoint, auraFrame, "BOTTOMLEFT", anchor, "TOPLEFT", 0, 2)
-  pcall(auraFrame.SetSize, auraFrame, maxIcons * size + math.max(0, maxIcons - 1) * spacing, size)
-  pcall(auraFrame.SetFrameLevel, auraFrame, (type(unitFrame.GetFrameLevel) == "function" and unitFrame:GetFrameLevel() or 0) + 100)
-  pcall(auraFrame.SetFrameStrata, auraFrame, "HIGH")
+  SetBlizzardAurasShown(unitFrame, true)
+end
 
-  local children = { seen = {} }
-  AddKnownAuraButtons(unitFrame, auraFrame, children)
-  CollectAuraButtons(auraFrame, children, 1)
+local function GetCooldownFrame(button)
+  if type(button) ~= "table" then
+    return nil
+  end
 
-  local styled = 0
-  for _, child in ipairs(children) do
-    if child and type(child.IsShown) == "function" and child:IsShown() then
-      styled = styled + 1
-      ConfigureAuraButton(child, size)
-      pcall(child.ClearAllPoints, child)
-      pcall(child.SetPoint, child, "BOTTOMLEFT", auraFrame, "BOTTOMLEFT", (styled - 1) * (size + spacing), 0)
+  return button.cooldown or button.Cooldown or button.CooldownFrame
+end
 
-      if styled > maxIcons then
-        pcall(child.Hide, child)
+local function StoreNativeCooldown(unitFrame, button, start, duration, unit)
+  if type(button) ~= "table" then
+    return
+  end
+
+  local stored = false
+  if type(unitFrame) == "table" then
+    lastNativeCooldownByFrame[unitFrame] = {
+      hasCooldown = true,
+      start = start,
+      duration = duration,
+    }
+    stored = true
+  end
+
+  unit = unit or button.unitToken
+  if type(unit) == "string" and string.match(unit, "^nameplate%d+$") then
+    lastNativeCooldownByUnit[unit] = {
+      hasCooldown = true,
+      start = start,
+      duration = duration,
+    }
+    stored = true
+  end
+
+  if stored then
+    cooldownCaptureStats.stored = cooldownCaptureStats.stored + 1
+  end
+
+  local auraInstanceID = button.auraInstanceID
+  if auraInstanceID == nil then
+    return
+  end
+
+  if type(unitFrame) == "table" then
+    local cooldowns = nativeCooldownsByFrame[unitFrame]
+    if not cooldowns then
+      cooldowns = {}
+      nativeCooldownsByFrame[unitFrame] = cooldowns
+    end
+
+    cooldowns[auraInstanceID] = {
+      hasCooldown = true,
+      start = start,
+      duration = duration,
+    }
+    cooldownCaptureStats.storedExact = cooldownCaptureStats.storedExact + 1
+  end
+
+  if type(unit) == "string" and string.match(unit, "^nameplate%d+$") then
+    local cooldowns = nativeCooldownsByUnit[unit]
+    if not cooldowns then
+      cooldowns = {}
+      nativeCooldownsByUnit[unit] = cooldowns
+    end
+
+    cooldowns[auraInstanceID] = {
+      hasCooldown = true,
+      start = start,
+      duration = duration,
+    }
+    cooldownCaptureStats.storedExact = cooldownCaptureStats.storedExact + 1
+  end
+end
+
+local function StoreNativeCooldownFromFrame(cooldown, start, duration)
+  cooldownCaptureStats.calls = cooldownCaptureStats.calls + 1
+
+  if type(cooldown) ~= "table" or type(cooldown.GetParent) ~= "function" then
+    cooldownCaptureStats.noParent = cooldownCaptureStats.noParent + 1
+    return
+  end
+
+  local okParent, button = pcall(cooldown.GetParent, cooldown)
+  if not okParent or type(button) ~= "table" then
+    button = nativeCooldownButtons[cooldown]
+  end
+
+  if type(button) ~= "table" then
+    cooldownCaptureStats.noParent = cooldownCaptureStats.noParent + 1
+    return
+  end
+
+  local unit = nativeCooldownUnits[cooldown] or button.unitToken
+  if type(unit) ~= "string" and type(button.GetParent) == "function" then
+    local frame = button
+    for _ = 1, 4 do
+      local okFrame, parent = pcall(frame.GetParent, frame)
+      if not okFrame or type(parent) ~= "table" then
+        break
       end
+
+      unit = parent.unitToken
+      if type(unit) == "string" then
+        break
+      end
+
+      frame = parent
+    end
+  end
+
+  if type(unit) ~= "string" then
+    lastUnresolvedNativeCooldown = {
+      hasCooldown = true,
+      start = start,
+      duration = duration,
+    }
+    cooldownCaptureStats.unresolved = cooldownCaptureStats.unresolved + 1
+    cooldownCaptureStats.noUnit = cooldownCaptureStats.noUnit + 1
+    return
+  end
+
+  if not string.match(unit, "^nameplate%d+$") then
+    cooldownCaptureStats.nonNameplate = cooldownCaptureStats.nonNameplate + 1
+    return
+  end
+
+  local unitFrame = framesByUnit[unit]
+  if not unitFrame then
+    unitFrame = GetNamePlateUnitFrame(unit)
+    if unitFrame then
+      framesByUnit[unit] = unitFrame
+      unitsByFrame[unitFrame] = unit
+    end
+  end
+
+  StoreNativeCooldown(unitFrame, button, start, duration, unit)
+
+  if unitFrame and type(unit) == "string" and type(ScheduleStyle) == "function" and C_Timer and type(C_Timer.After) == "function" then
+    cooldownCaptureStats.refreshed = cooldownCaptureStats.refreshed + 1
+    C_Timer.After(0, function()
+      ScheduleStyle(unitFrame, unit)
+    end)
+  end
+end
+
+local function HookCooldownFrameSet()
+  if type(hooksecurefunc) ~= "function" then
+    return
+  end
+
+  if not cooldownFrameSetHooked and type(CooldownFrame_Set) == "function" then
+    local okHook = pcall(hooksecurefunc, "CooldownFrame_Set", function(cooldown, start, duration)
+      StoreNativeCooldownFromFrame(cooldown, start, duration)
+    end)
+    cooldownFrameSetHooked = okHook == true
+  end
+
+  if not cooldownMixinHooked and type(CooldownFrameMixin) == "table" and type(CooldownFrameMixin.SetCooldown) == "function" then
+    local okHook = pcall(hooksecurefunc, CooldownFrameMixin, "SetCooldown", function(cooldown, start, duration)
+      StoreNativeCooldownFromFrame(cooldown, start, duration)
+    end)
+    cooldownMixinHooked = okHook == true
+  end
+end
+
+local function HookNativeCooldowns(unitFrame)
+  local auraFrame = unitFrame and unitFrame.AurasFrame
+  if not auraFrame then
+    return
+  end
+
+  local buttons = { seen = {} }
+  AddKnownAuraButtons(unitFrame, auraFrame, buttons)
+  CollectAuraButtons(auraFrame, buttons, 1)
+
+  for _, button in ipairs(buttons) do
+    local cooldown = GetCooldownFrame(button)
+    if cooldown then
+      cooldownCaptureStats.discovered = cooldownCaptureStats.discovered + 1
+      nativeCooldownButtons[cooldown] = button
+      nativeCooldownUnits[cooldown] = button.unitToken or unitsByFrame[unitFrame]
+      if type(nativeCooldownUnits[cooldown]) == "string" and string.match(nativeCooldownUnits[cooldown], "^nameplate%d+$") then
+        cooldownCaptureStats.mapped = cooldownCaptureStats.mapped + 1
+      end
+    end
+
+    if cooldown and not hookedNativeCooldowns[cooldown] and type(hooksecurefunc) == "function" and type(cooldown.SetCooldown) == "function" then
+      hookedNativeCooldowns[cooldown] = true
+      hooksecurefunc(cooldown, "SetCooldown", function(_, start, duration)
+        cooldownCaptureStats.calls = cooldownCaptureStats.calls + 1
+        local unit = nativeCooldownUnits[cooldown] or button.unitToken or unitsByFrame[unitFrame]
+        if type(unit) ~= "string" then
+          cooldownCaptureStats.noUnit = cooldownCaptureStats.noUnit + 1
+          return
+        end
+
+        if not string.match(unit, "^nameplate%d+$") then
+          cooldownCaptureStats.nonNameplate = cooldownCaptureStats.nonNameplate + 1
+          return
+        end
+
+        StoreNativeCooldown(unitFrame, button, start, duration, unit)
+        if unitFrame and type(unit) == "string" and type(ScheduleStyle) == "function" and C_Timer and type(C_Timer.After) == "function" then
+          cooldownCaptureStats.refreshed = cooldownCaptureStats.refreshed + 1
+          C_Timer.After(0, function()
+            ScheduleStyle(unitFrame, unit)
+          end)
+        end
+      end)
     end
   end
 end
 
-local function ScheduleStyle(unitFrame)
-  StyleBlizzardAuras(unitFrame)
+function ReplayNativeCooldown(unitFrame, iconIndex, aura, cooldown, unit)
+  if type(cooldown) ~= "table" or type(cooldown.SetCooldown) ~= "function" then
+    return false
+  end
+
+  local auraInstanceID = ns.Auras.SafeField(aura, "auraInstanceID")
+  local replayedCooldowns
+  if type(unitFrame) == "table" then
+    replayedCooldowns = replayedCooldownsByFrame[unitFrame]
+    if not replayedCooldowns then
+      replayedCooldowns = {}
+      replayedCooldownsByFrame[unitFrame] = replayedCooldowns
+    end
+  end
+
+  local cooldowns = nativeCooldownsByFrame[unitFrame]
+  local native = cooldowns and cooldowns[auraInstanceID]
+  if not native and type(unit) == "string" then
+    cooldowns = nativeCooldownsByUnit[unit]
+    native = cooldowns and cooldowns[auraInstanceID]
+    replayedCooldowns = replayedCooldownsByUnit[unit]
+    if not replayedCooldowns then
+      replayedCooldowns = {}
+      replayedCooldownsByUnit[unit] = replayedCooldowns
+    end
+  end
+  if not native and type(unit) == "string" then
+    native = lastNativeCooldownByUnit[unit]
+  end
+  if not native then
+    native = lastNativeCooldownByFrame[unitFrame]
+  end
+  if not native then
+    native = lastUnresolvedNativeCooldown
+  end
+
+  if native and native.hasCooldown then
+    local ok = pcall(cooldown.SetCooldown, cooldown, native.start, native.duration)
+    if replayedCooldowns then
+      replayedCooldowns[auraInstanceID] = ok == true
+    end
+    return ok == true
+  end
+
+  if replayedCooldowns then
+    replayedCooldowns[auraInstanceID] = false
+  end
+  return false
+end
+
+local function RenderNameplateAuras(unitFrame, unit)
+  if not unit then
+    ns.Frames.Clear("nameplateDebuffs", unitFrame)
+    SetBlizzardAurasShown(unitFrame, true)
+    return
+  end
+
+  if not ns.GetSettings("nameplateDebuffs").enabled then
+    ns.Frames.Clear("nameplateDebuffs", unitFrame)
+    SetBlizzardAurasShown(unitFrame, true)
+    return
+  end
+
+  if UnitCanAttack and UnitCanAttack("player", unit) then
+    ns.Frames.Clear("nameplateDebuffs", unitFrame)
+    StyleNativeAuraButtons(unitFrame)
+  elseif #ns.GetEnabledCategories({ "hots", "externals", "utility" }) > 0 then
+    SetBlizzardAurasShown(unitFrame, false)
+    ns.Frames.RenderAuras("nameplateDebuffs", unitFrame, unit, GetFriendlyHotOptions())
+  else
+    ns.Frames.Clear("nameplateDebuffs", unitFrame)
+    SetBlizzardAurasShown(unitFrame, true)
+  end
+end
+
+function ScheduleStyle(unitFrame, unit)
+  unit = unit or unitsByFrame[unitFrame] or ns.Frames.GetUnit(unitFrame)
+
+  RenderNameplateAuras(unitFrame, unit)
   C_Timer.After(0, function()
-    StyleBlizzardAuras(unitFrame)
+    RenderNameplateAuras(unitFrame, unit)
   end)
   C_Timer.After(0.05, function()
-    StyleBlizzardAuras(unitFrame)
+    RenderNameplateAuras(unitFrame, unit)
   end)
   C_Timer.After(0.15, function()
-    StyleBlizzardAuras(unitFrame)
+    RenderNameplateAuras(unitFrame, unit)
   end)
 end
 
@@ -310,12 +601,7 @@ function NameplateDebuffs:UpdateUnit(unit)
   end
 
   if UnitCanAttack and UnitCanAttack("player", unit) then
-    if #ns.GetEnabledCategories({ "dots", "utility" }) > 0 then
-      ScheduleStyle(unitFrame)
-    else
-      ns.Frames.Clear("nameplateDebuffs", unitFrame)
-      SetBlizzardAurasShown(unitFrame, true)
-    end
+    ScheduleStyle(unitFrame, unit)
   else
     if #ns.GetEnabledCategories({ "hots", "externals", "utility" }) > 0 then
       SetBlizzardAurasShown(unitFrame, false)
@@ -427,6 +713,40 @@ local function DebugOutput(lines)
   return table.concat(safeLines, "\n")
 end
 
+local function HasCapturedCooldown(unitFrame, aura, unit)
+  local auraInstanceID = ns.Auras.SafeField(aura, "auraInstanceID")
+  local cooldowns = nativeCooldownsByFrame[unitFrame]
+  local native = cooldowns and cooldowns[auraInstanceID]
+  if native and native.hasCooldown == true then
+    return true
+  end
+
+  cooldowns = nativeCooldownsByUnit[unit]
+  native = cooldowns and cooldowns[auraInstanceID]
+  if native and native.hasCooldown == true then
+    return true
+  end
+
+  native = lastNativeCooldownByUnit[unit] or lastNativeCooldownByFrame[unitFrame]
+  if native and native.hasCooldown == true then
+    return true
+  end
+
+  native = lastUnresolvedNativeCooldown
+  return native and native.hasCooldown == true
+end
+
+local function HasReplayedCooldown(unitFrame, aura, unit)
+  local auraInstanceID = ns.Auras.SafeField(aura, "auraInstanceID")
+  local replayedCooldowns = replayedCooldownsByFrame[unitFrame]
+  if replayedCooldowns and replayedCooldowns[auraInstanceID] == true then
+    return true
+  end
+
+  replayedCooldowns = replayedCooldownsByUnit[unit]
+  return replayedCooldowns and replayedCooldowns[auraInstanceID] == true
+end
+
 function NameplateDebuffs:Debug()
   self:ApplySettings()
 
@@ -440,6 +760,11 @@ function NameplateDebuffs:Debug()
     "C_NamePlate: " .. tostring(type(C_NamePlate)),
     "GetNamePlates: " .. tostring(C_NamePlate and type(C_NamePlate.GetNamePlates)),
     "GetNamePlateForUnit: " .. tostring(C_NamePlate and type(C_NamePlate.GetNamePlateForUnit)),
+    "CooldownFrame_Set hook: " .. tostring(cooldownFrameSetHooked),
+    "CooldownFrameMixin hook: " .. tostring(cooldownMixinHooked),
+    "cooldown captures: calls=" .. tostring(cooldownCaptureStats.calls) .. " stored=" .. tostring(cooldownCaptureStats.stored) .. " exact=" .. tostring(cooldownCaptureStats.storedExact) .. " refreshed=" .. tostring(cooldownCaptureStats.refreshed) .. " unresolved=" .. tostring(cooldownCaptureStats.unresolved),
+    "cooldown mapped: discovered=" .. tostring(cooldownCaptureStats.discovered) .. " mapped=" .. tostring(cooldownCaptureStats.mapped),
+    "cooldown skips: noParent=" .. tostring(cooldownCaptureStats.noParent) .. " noUnit=" .. tostring(cooldownCaptureStats.noUnit) .. " nonNameplate=" .. tostring(cooldownCaptureStats.nonNameplate),
   }
 
   if not C_NamePlate or not C_NamePlate.GetNamePlates then
@@ -455,6 +780,10 @@ function NameplateDebuffs:Debug()
     AppendLine(lines, "UnitExists:", tostring(UnitExists(token)))
     if UnitExists(token) then
       AppendLine(lines, "UnitCanAttack:", tostring(UnitCanAttack and UnitCanAttack("player", token)))
+      AppendLine(lines, "UnitIsPlayer:", tostring(UnitIsPlayer and UnitIsPlayer(token)))
+      AppendLine(lines, "UnitPlayerControlled:", tostring(UnitPlayerControlled and UnitPlayerControlled(token)))
+      AppendLine(lines, "UnitCreatureType:", tostring(UnitCreatureType and UnitCreatureType(token)))
+      AppendLine(lines, "UnitClassification:", tostring(UnitClassification and UnitClassification(token)))
       local seen = 0
       for auraIndex = 1, 10 do
         local aura = ns.Auras.Read(token, auraIndex, "HARMFUL", GetOptions())
@@ -464,7 +793,7 @@ function NameplateDebuffs:Debug()
 
         seen = seen + 1
         local options = GetOptions()
-        AppendLine(lines, "  debuff", auraIndex, "name=", ns.Auras.SafeText(ns.Auras.SafeField(aura, "name") or "nil"), "spellId=", ns.Auras.SafeText(ns.Auras.SafeField(aura, "spellId") or "nil"), "icon=", tostring(ns.Auras.HasIcon(aura)), "duration=", tostring(ns.Auras.HasDuration(aura)), "player=", tostring(ns.Auras.IsPlayerAura(aura)), "deny=", tostring(ns.Auras.IsDenylisted(aura)), "restrictedFallback=", tostring(options.allowRestrictedPlayerAura and ns.Auras.IsPlayerAura(aura)), "match=", tostring(ns.Auras.Matches(aura, options)))
+        AppendLine(lines, "  debuff", auraIndex, "auraInstanceID=", ns.Auras.SafeText(ns.Auras.SafeField(aura, "auraInstanceID") or "nil"), "name=", ns.Auras.SafeText(ns.Auras.SafeField(aura, "name") or "nil"), "spellId=", ns.Auras.SafeText(ns.Auras.SafeField(aura, "spellId") or "nil"), "icon=", tostring(ns.Auras.HasIcon(aura)), "duration=", tostring(ns.Auras.HasDuration(aura)), "player=", tostring(ns.Auras.IsPlayerAura(aura)), "deny=", tostring(ns.Auras.IsDenylisted(aura)), "restrictedFallback=", tostring(options.allowRestrictedAura), "match=", tostring(ns.Auras.Matches(aura, options)))
       end
       AppendLine(lines, "harmful scanned:", seen)
 
@@ -507,6 +836,10 @@ function NameplateDebuffs:Debug()
     if unit then
       AppendLine(lines, "UnitExists:", tostring(UnitExists(unit)))
       AppendLine(lines, "UnitCanAttack:", tostring(UnitCanAttack and UnitCanAttack("player", unit)))
+      AppendLine(lines, "UnitIsPlayer:", tostring(UnitIsPlayer and UnitIsPlayer(unit)))
+      AppendLine(lines, "UnitPlayerControlled:", tostring(UnitPlayerControlled and UnitPlayerControlled(unit)))
+      AppendLine(lines, "UnitCreatureType:", tostring(UnitCreatureType and UnitCreatureType(unit)))
+      AppendLine(lines, "UnitClassification:", tostring(UnitClassification and UnitClassification(unit)))
 
       local seen = 0
       local matched = 0
@@ -522,7 +855,7 @@ function NameplateDebuffs:Debug()
         end
 
         local options = GetOptions()
-        AppendLine(lines, "  debuff", auraIndex, "name=", ns.Auras.SafeText(ns.Auras.SafeField(aura, "name") or "nil"), "spellId=", ns.Auras.SafeText(ns.Auras.SafeField(aura, "spellId") or "nil"), "icon=", tostring(ns.Auras.HasIcon(aura)), "duration=", tostring(ns.Auras.HasDuration(aura)), "player=", tostring(ns.Auras.IsPlayerAura(aura)), "deny=", tostring(ns.Auras.IsDenylisted(aura)), "restrictedFallback=", tostring(options.allowRestrictedPlayerAura and ns.Auras.IsPlayerAura(aura)), "match=", tostring(ns.Auras.Matches(aura, options)))
+        AppendLine(lines, "  debuff", auraIndex, "auraInstanceID=", ns.Auras.SafeText(ns.Auras.SafeField(aura, "auraInstanceID") or "nil"), "name=", ns.Auras.SafeText(ns.Auras.SafeField(aura, "name") or "nil"), "spellId=", ns.Auras.SafeText(ns.Auras.SafeField(aura, "spellId") or "nil"), "icon=", tostring(ns.Auras.HasIcon(aura)), "duration=", tostring(ns.Auras.HasDuration(aura)), "player=", tostring(ns.Auras.IsPlayerAura(aura)), "capturedCooldown=", tostring(HasCapturedCooldown(unitFrame, aura, unit)), "replayedCooldown=", tostring(HasReplayedCooldown(unitFrame, aura, unit)), "deny=", tostring(ns.Auras.IsDenylisted(aura)), "restrictedFallback=", tostring(options.allowRestrictedAura), "match=", tostring(ns.Auras.Matches(aura, options)))
       end
 
       AppendLine(lines, "harmful scanned:", seen, "matched:", matched)

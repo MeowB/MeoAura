@@ -20,18 +20,21 @@ local DEFAULTS = {
     enabled = true,
     iconSize = 24,
     maxIcons = 5,
+    cooldownText = false,
   },
   arenaDebuffs = {
     enabled = false,
     iconSize = 24,
     maxIcons = 5,
     onlyPlayer = true,
+    cooldownText = false,
   },
   nameplateDebuffs = {
     enabled = false,
     iconSize = 24,
     maxIcons = 8,
     onlyPlayer = true,
+    cooldownText = false,
   },
 }
 
@@ -124,12 +127,23 @@ local function SetModuleIconCount(moduleKey, count)
   return true
 end
 
+local function SetModuleCooldownText(moduleKey, enabled)
+  local settings = ns.GetSettings(moduleKey)
+  if not settings then
+    return false
+  end
+
+  settings.cooldownText = enabled
+  ns.ApplySettings()
+  return true
+end
+
 function ns.PrintSettings()
   print(ns.displayName .. " Settings")
   print("  categories: hots=" .. tostring(ns.GetCategories().hots) .. ", dots=" .. tostring(ns.GetCategories().dots) .. ", externals=" .. tostring(ns.GetCategories().externals) .. ", utility=" .. tostring(ns.GetCategories().utility))
-  print("  raid hots: " .. tostring(ns.GetSettings("raidHots").enabled) .. ", size " .. tostring(ns.GetSettings("raidHots").iconSize) .. ", count " .. tostring(ns.GetSettings("raidHots").maxIcons))
-  print("  arena debuffs: " .. tostring(ns.GetSettings("arenaDebuffs").enabled) .. ", size " .. tostring(ns.GetSettings("arenaDebuffs").iconSize) .. ", count " .. tostring(ns.GetSettings("arenaDebuffs").maxIcons))
-  print("  nameplate debuffs: " .. tostring(ns.GetSettings("nameplateDebuffs").enabled) .. ", size " .. tostring(ns.GetSettings("nameplateDebuffs").iconSize) .. ", count " .. tostring(ns.GetSettings("nameplateDebuffs").maxIcons))
+  print("  raid hots: " .. tostring(ns.GetSettings("raidHots").enabled) .. ", size " .. tostring(ns.GetSettings("raidHots").iconSize) .. ", count " .. tostring(ns.GetSettings("raidHots").maxIcons) .. ", cooldown text " .. tostring(ns.GetSettings("raidHots").cooldownText))
+  print("  arena debuffs: " .. tostring(ns.GetSettings("arenaDebuffs").enabled) .. ", size " .. tostring(ns.GetSettings("arenaDebuffs").iconSize) .. ", count " .. tostring(ns.GetSettings("arenaDebuffs").maxIcons) .. ", cooldown text " .. tostring(ns.GetSettings("arenaDebuffs").cooldownText))
+  print("  nameplate debuffs: " .. tostring(ns.GetSettings("nameplateDebuffs").enabled) .. ", size " .. tostring(ns.GetSettings("nameplateDebuffs").iconSize) .. ", count " .. tostring(ns.GetSettings("nameplateDebuffs").maxIcons) .. ", cooldown text " .. tostring(ns.GetSettings("nameplateDebuffs").cooldownText))
 end
 
 local function HandleSlash(input)
@@ -154,6 +168,10 @@ local function HandleSlash(input)
     local size = tonumber(string.match(rest, "^size%s+(%d+)$"))
     if size then
       SetModuleIconSize("raidHots", size)
+    elseif rest == "text on" then
+      SetModuleCooldownText("raidHots", true)
+    elseif rest == "text off" then
+      SetModuleCooldownText("raidHots", false)
     else
       SetModuleEnabled("raidHots", rest ~= "off")
     end
@@ -161,6 +179,10 @@ local function HandleSlash(input)
     local size = tonumber(string.match(rest, "^size%s+(%d+)$"))
     if size then
       SetModuleIconSize("arenaDebuffs", size)
+    elseif rest == "text on" then
+      SetModuleCooldownText("arenaDebuffs", true)
+    elseif rest == "text off" then
+      SetModuleCooldownText("arenaDebuffs", false)
     else
       SetModuleEnabled("arenaDebuffs", rest == "on")
     end
@@ -171,6 +193,10 @@ local function HandleSlash(input)
       SetModuleIconSize("nameplateDebuffs", size)
     elseif count then
       SetModuleIconCount("nameplateDebuffs", count)
+    elseif rest == "text on" then
+      SetModuleCooldownText("nameplateDebuffs", true)
+    elseif rest == "text off" then
+      SetModuleCooldownText("nameplateDebuffs", false)
     elseif rest == "test" then
       if ns.NameplateDebuffs and ns.NameplateDebuffs.ShowTestIcons then
         ns.NameplateDebuffs:ShowTestIcons()

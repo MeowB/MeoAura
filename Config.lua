@@ -70,6 +70,23 @@ local function CreateSlider(parent, moduleKey, y)
   end
 end
 
+local function CreateCooldownTextCheckbox(parent, moduleKey, y)
+  local checkbox = CreateFrame("CheckButton", ControlName(moduleKey, "CooldownText"), parent, "InterfaceOptionsCheckButtonTemplate")
+  checkbox:SetPoint("TOPLEFT", parent, "TOPLEFT", 32, y)
+  local label = _G[checkbox:GetName() .. "Text"] or checkbox.Text
+  if label then
+    label:SetText(MODULE_LABELS[moduleKey] .. " cooldown text")
+  end
+  checkbox:SetScript("OnClick", function(self)
+    ns.GetSettings(moduleKey).cooldownText = self:GetChecked()
+    ns.ApplySettings()
+  end)
+
+  parent.controls[#parent.controls + 1] = function()
+    checkbox:SetChecked(ns.GetSettings(moduleKey).cooldownText)
+  end
+end
+
 local function CreateCategoryCheckbox(parent, categoryKey, y)
   local checkbox = CreateFrame("CheckButton", ControlName("Category" .. categoryKey, "Enabled"), parent, "InterfaceOptionsCheckButtonTemplate")
   checkbox:SetPoint("TOPLEFT", parent, "TOPLEFT", 280, y)
@@ -89,7 +106,7 @@ end
 
 local function CreateSaveButton(parent)
   local button = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
-  button:SetPoint("TOPLEFT", parent, "TOPLEFT", 16, -314)
+  button:SetPoint("TOPLEFT", parent, "TOPLEFT", 16, -382)
   button:SetSize(160, 24)
   button:SetText("Apply Settings")
   button:SetScript("OnClick", function()
@@ -115,10 +132,13 @@ function Config:Create()
 
   CreateCheckbox(panel, "raidHots", -52)
   CreateSlider(panel, "raidHots", -88)
-  CreateCheckbox(panel, "arenaDebuffs", -138)
-  CreateSlider(panel, "arenaDebuffs", -174)
-  CreateCheckbox(panel, "nameplateDebuffs", -224)
-  CreateSlider(panel, "nameplateDebuffs", -260)
+  CreateCooldownTextCheckbox(panel, "raidHots", -122)
+  CreateCheckbox(panel, "arenaDebuffs", -158)
+  CreateSlider(panel, "arenaDebuffs", -194)
+  CreateCooldownTextCheckbox(panel, "arenaDebuffs", -228)
+  CreateCheckbox(panel, "nameplateDebuffs", -264)
+  CreateSlider(panel, "nameplateDebuffs", -300)
+  CreateCooldownTextCheckbox(panel, "nameplateDebuffs", -334)
 
   local categoryTitle = panel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
   categoryTitle:SetPoint("TOPLEFT", panel, "TOPLEFT", 280, -52)

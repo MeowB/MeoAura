@@ -17,6 +17,7 @@ local TRACKED_AURAS = {
       ["Enveloping Mist"] = true,
       ["Essence Font"] = true,
       ["Renew"] = true,
+      ["Atonement"] = true,
       ["Prayer of Mending"] = true,
       ["Riptide"] = true,
       ["Earthliving"] = true,
@@ -35,6 +36,7 @@ local TRACKED_AURAS = {
       [124682] = true,
       [191840] = true,
       [139] = true,
+      [194384] = true,
       [33076] = true,
       [61295] = true,
       [51945] = true,
@@ -261,10 +263,28 @@ function Auras.IsTrackedHot(aura)
   return Auras.IsTrackedAura(aura, "hots")
 end
 
-function Auras.ReadLegacy(unit, index, filter)
+local function GetReadFilter(filter, options)
+  local readFilter = filter
+
+  if options and options.onlyPlayer then
+    if filter == "HARMFUL" then
+      readFilter = "HARMFUL|PLAYER"
+    elseif filter == "HELPFUL" then
+      readFilter = "HELPFUL|PLAYER"
+    end
+  end
+
+  if options and options.includeNameplateOnly then
+    readFilter = readFilter .. "|INCLUDE_NAME_PLATE_ONLY"
+  end
+
+  return readFilter
+end
+
+function Auras.ReadLegacy(unit, index, filter, options)
   local reader = filter == "HARMFUL" and UnitDebuff or UnitBuff
   if reader then
-    local name, icon, applications, _, duration, expirationTime, source = reader(unit, index)
+    local name, icon, applications, _, duration, expirationTime, source = reader(unit, index, GetReadFilter(filter, options))
     if name then
       return {
         name = name,
@@ -278,24 +298,56 @@ function Auras.ReadLegacy(unit, index, filter)
   end
 end
 
+local function ReadModern(unit, index, filter, options)
+  if C_UnitAuras and C_UnitAuras.GetAuraDataByIndex then
+    return C_UnitAuras.GetAuraDataByIndex(unit, index, GetReadFilter(filter, options))
+  end
+end
+
+local function CopyModernField(target, source, field)
+  if Auras.SafeField(target, field) == nil then
+    local value = Auras.SafeField(source, field)
+    if value ~= nil then
+      target[field] = value
+    end
+  end
+end
+
+local function MergeAuraData(primary, secondary)
+  if type(primary) ~= "table" or type(secondary) ~= "table" then
+    return primary
+  end
+
+  CopyModernField(primary, secondary, "name")
+  CopyModernField(primary, secondary, "spellId")
+  CopyModernField(primary, secondary, "duration")
+  CopyModernField(primary, secondary, "expirationTime")
+  CopyModernField(primary, secondary, "applications")
+  CopyModernField(primary, secondary, "count")
+  CopyModernField(primary, secondary, "sourceUnit")
+  CopyModernField(primary, secondary, "source")
+  CopyModernField(primary, secondary, "sourceGUID")
+  CopyModernField(primary, secondary, "isFromPlayerOrPlayerPet")
+  CopyModernField(primary, secondary, "auraInstanceID")
+
+  return primary
+end
+
 function Auras.Read(unit, index, filter, options)
   if options and options.preferLegacy then
-    local legacyAura = Auras.ReadLegacy(unit, index, filter)
+    local legacyAura = Auras.ReadLegacy(unit, index, filter, options)
     if legacyAura then
-      return legacyAura
+      return MergeAuraData(legacyAura, ReadModern(unit, index, filter, options))
     end
   end
 
-  local aura
-  if C_UnitAuras and C_UnitAuras.GetAuraDataByIndex then
-    aura = C_UnitAuras.GetAuraDataByIndex(unit, index, filter)
-  end
+  local aura = ReadModern(unit, index, filter, options)
 
   if aura and Auras.HasIcon(aura) then
     return aura
   end
 
-  return Auras.ReadLegacy(unit, index, filter) or aura
+  return Auras.ReadLegacy(unit, index, filter, options) or aura
 end
 
 function Auras.Matches(aura, options)
@@ -325,6 +377,10 @@ function Auras.Matches(aura, options)
 
   if options.categories then
     if Auras.IsTrackedAura(aura, options.categories) then
+      return true
+    end
+
+    if options.allowRestrictedAura then
       return true
     end
 
