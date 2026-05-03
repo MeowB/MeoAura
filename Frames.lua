@@ -131,6 +131,7 @@ local function ConfigureButton(unitFrame, button, index, config)
 
   button:SetSize(size, size)
   Raise(unitFrame, button)
+  button:EnableMouse(config.captureMouse == true or config.tooltips == true)
 
   local growth = config.growth or "LEFT"
   local xOffset = (config.x or 0)
@@ -149,9 +150,67 @@ local function ConfigureButton(unitFrame, button, index, config)
   end
 end
 
+local function GetTooltipFilter(options)
+  local filter = options.filter
+  if type(filter) ~= "string" then
+    return nil
+  end
+
+  if options.onlyPlayer then
+    if filter == "HARMFUL" then
+      filter = "HARMFUL|PLAYER"
+    elseif filter == "HELPFUL" then
+      filter = "HELPFUL|PLAYER"
+    end
+  end
+
+  if options.includeNameplateOnly then
+    filter = filter .. "|INCLUDE_NAME_PLATE_ONLY"
+  end
+
+  return filter
+end
+
+local function SetButtonTooltip(button)
+  if not button.tooltipEnabled or not GameTooltip or type(button.tooltipUnit) ~= "string" or type(button.tooltipAuraIndex) ~= "number" then
+    return
+  end
+
+  if not UnitExists(button.tooltipUnit) then
+    return
+  end
+
+  GameTooltip:SetOwner(button, "ANCHOR_RIGHT")
+
+  local ok = false
+  if type(GameTooltip.SetUnitAura) == "function" then
+    ok = pcall(GameTooltip.SetUnitAura, GameTooltip, button.tooltipUnit, button.tooltipAuraIndex, button.tooltipFilter)
+  end
+
+  if not ok and type(button.tooltipFilter) == "string" and button.tooltipFilter:find("HELPFUL") and type(GameTooltip.SetUnitBuff) == "function" then
+    ok = pcall(GameTooltip.SetUnitBuff, GameTooltip, button.tooltipUnit, button.tooltipAuraIndex, button.tooltipFilter)
+  elseif not ok and type(button.tooltipFilter) == "string" and button.tooltipFilter:find("HARMFUL") and type(GameTooltip.SetUnitDebuff) == "function" then
+    ok = pcall(GameTooltip.SetUnitDebuff, GameTooltip, button.tooltipUnit, button.tooltipAuraIndex, button.tooltipFilter)
+  end
+
+  if ok then
+    GameTooltip:Show()
+  else
+    GameTooltip:Hide()
+  end
+end
+
+local function ClearButtonTooltip(button)
+  if GameTooltip and GameTooltip:GetOwner() == button then
+    GameTooltip:Hide()
+  end
+end
+
 local function CreateButton(moduleKey, unitFrame, index, config)
   local button = CreateFrame("Frame", nil, unitFrame)
   button.moduleKey = moduleKey
+  button:SetScript("OnEnter", SetButtonTooltip)
+  button:SetScript("OnLeave", ClearButtonTooltip)
 
   button.icon = button:CreateTexture(nil, "ARTWORK")
   button.icon:SetAllPoints(button)
@@ -180,6 +239,10 @@ end
 
 local function EnsureButtons(moduleKey, unitFrame, config)
   local buttons, store = GetStore(OVERLAYS, moduleKey, unitFrame)
+  if not buttons and config.skipCreate == true then
+    return nil
+  end
+
   if not buttons then
     buttons = {}
     store[unitFrame] = buttons
@@ -187,13 +250,24 @@ local function EnsureButtons(moduleKey, unitFrame, config)
 
   for index = 1, config.maxIcons do
     if not buttons[index] then
+      if config.skipCreate == true then
+        return nil
+      end
       buttons[index] = CreateButton(moduleKey, unitFrame, index, config)
-    else
+    elseif config.skipLayout ~= true then
       ConfigureButton(unitFrame, buttons[index], index, config)
     end
   end
 
   return buttons
+end
+
+local function ClearButtonAura(button)
+  button.tooltipEnabled = false
+  button.tooltipUnit = nil
+  button.tooltipAuraIndex = nil
+  button.tooltipFilter = nil
+  ClearButtonTooltip(button)
 end
 
 function Frames.Clear(moduleKey, unitFrame)
@@ -206,22 +280,14 @@ function Frames.Clear(moduleKey, unitFrame)
 
   if buttons then
     for _, button in ipairs(buttons) do
+      ClearButtonAura(button)
       button:Hide()
     end
   end
 end
 
-function Frames.RenderAuras(moduleKey, unitFrame, unit, options)
-  if not unitFrame or not unit or not UnitExists(unit) then
-    Frames.Clear(moduleKey, unitFrame)
-    return
-  end
-
-  if Frames.IsForbidden(unitFrame) then
-    return
-  end
-
-  local config = {
+local function GetConfig(options)
+  return {
     iconSize = options.iconSize or 21,
     maxIcons = options.maxIcons or 5,
     spacing = options.spacing or 0,
@@ -237,76 +303,73 @@ function Frames.RenderAuras(moduleKey, unitFrame, unit, options)
     cooldownFallback = options.cooldownFallback,
     cooldownReplay = options.cooldownReplay,
     cooldownText = options.cooldownText,
+    captureMouse = options.captureMouse,
+    tooltips = options.tooltips,
+    skipCreate = options.skipCreate,
+    skipLayout = options.skipLayout,
   }
+end
 
-  local buttons = EnsureButtons(moduleKey, unitFrame, config)
-  local backing = EnsureBacking(moduleKey, unitFrame, config)
+local function RenderButtonAura(unitFrame, unit, button, aura, config, options, iconIndex, auraIndex)
+  local icon = ns.Auras.GetIcon(aura)
+  local okTexture = pcall(button.icon.SetTexture, button.icon, icon)
 
-  local auraIndex = 1
-  local iconIndex = 1
+  if not okTexture then
+    return false
+  end
 
-  while auraIndex <= (options.maxScan or 40) and iconIndex <= config.maxIcons do
-    local aura = ns.Auras.Read(unit, auraIndex, options.filter, options)
-    if not aura then
-      break
-    end
+  Raise(unitFrame, button)
+  button.tooltipEnabled = config.tooltips == true and type(auraIndex) == "number"
+  button.tooltipUnit = unit
+  button.tooltipAuraIndex = auraIndex
+  button.tooltipFilter = type(auraIndex) == "number" and GetTooltipFilter(options) or nil
 
-    if ns.Auras.Matches(aura, options) then
-      local button = buttons[iconIndex]
-      local icon = ns.Auras.GetIcon(aura)
-      local okTexture = pcall(button.icon.SetTexture, button.icon, icon)
-
-      if okTexture then
-        Raise(unitFrame, button)
-
-        local okCooldown = pcall(function()
-          local duration = ns.Auras.SafeField(aura, "duration")
-          local expirationTime = ns.Auras.SafeField(aura, "expirationTime")
-          if (type(duration) ~= "number" or type(expirationTime) ~= "number" or duration <= 0) and type(config.cooldownFallback) == "function" then
-            local fallbackStart, fallbackDuration = config.cooldownFallback(unitFrame, iconIndex, aura)
-            if type(fallbackStart) == "number" and type(fallbackDuration) == "number" and fallbackDuration > 0 then
-              duration = fallbackDuration
-              expirationTime = fallbackStart + fallbackDuration
-            end
-          end
-
-          if type(duration) == "number" and type(expirationTime) == "number" and duration > 0 then
-            button.cooldown:SetCooldown(expirationTime - duration, duration)
-            button.cooldown:Show()
-          elseif type(config.cooldownReplay) == "function" and config.cooldownReplay(unitFrame, iconIndex, aura, button.cooldown, unit) then
-            button.cooldown:Show()
-          else
-            button.cooldown:Hide()
-          end
-        end)
-
-        if not okCooldown then
-          button.cooldown:Hide()
-        end
-
-        local okCount = pcall(function()
-          local applications = ns.Auras.SafeField(aura, "applications") or ns.Auras.SafeField(aura, "count") or 0
-          if applications and applications > 1 then
-            button.count:SetText(ns.Auras.SafeText(applications))
-          else
-            button.count:SetText("")
-          end
-        end)
-
-        if not okCount then
-          button.count:SetText("")
-        end
-
-        button:Show()
-        iconIndex = iconIndex + 1
+  local okCooldown = pcall(function()
+    local duration = ns.Auras.SafeField(aura, "duration")
+    local expirationTime = ns.Auras.SafeField(aura, "expirationTime")
+    if (type(duration) ~= "number" or type(expirationTime) ~= "number" or duration <= 0) and type(config.cooldownFallback) == "function" then
+      local fallbackStart, fallbackDuration = config.cooldownFallback(unitFrame, iconIndex, aura)
+      if type(fallbackStart) == "number" and type(fallbackDuration) == "number" and fallbackDuration > 0 then
+        duration = fallbackDuration
+        expirationTime = fallbackStart + fallbackDuration
       end
     end
 
-    auraIndex = auraIndex + 1
+    if type(duration) == "number" and type(expirationTime) == "number" and duration > 0 then
+      button.cooldown:SetCooldown(expirationTime - duration, duration)
+      button.cooldown:Show()
+    elseif type(config.cooldownReplay) == "function" and config.cooldownReplay(unitFrame, iconIndex, aura, button.cooldown, unit) then
+      button.cooldown:Show()
+    else
+      button.cooldown:Hide()
+    end
+  end)
+
+  if not okCooldown then
+    button.cooldown:Hide()
   end
 
+  local okCount = pcall(function()
+    local applications = ns.Auras.SafeField(aura, "applications") or ns.Auras.SafeField(aura, "count") or 0
+    if applications and applications > 1 then
+      button.count:SetText(ns.Auras.SafeText(applications))
+    else
+      button.count:SetText("")
+    end
+  end)
+
+  if not okCount then
+    button.count:SetText("")
+  end
+
+  button:Show()
+  return true
+end
+
+local function FinishRender(moduleKey, unitFrame, buttons, backing, config, iconIndex)
   for index = iconIndex, #buttons do
     if buttons[index] then
+      ClearButtonAura(buttons[index])
       buttons[index]:Hide()
     end
   end
@@ -320,6 +383,75 @@ function Frames.RenderAuras(moduleKey, unitFrame, unit, options)
   else
     backing:Hide()
   end
+end
+
+function Frames.RenderAuras(moduleKey, unitFrame, unit, options)
+  if not unitFrame or not unit or not UnitExists(unit) then
+    Frames.Clear(moduleKey, unitFrame)
+    return
+  end
+
+  if Frames.IsForbidden(unitFrame) then
+    return
+  end
+
+  local config = GetConfig(options)
+
+  local buttons = EnsureButtons(moduleKey, unitFrame, config)
+  if not buttons then
+    return
+  end
+
+  local backing = EnsureBacking(moduleKey, unitFrame, config)
+
+  local auraIndex = 1
+  local iconIndex = 1
+
+  while auraIndex <= (options.maxScan or 40) and iconIndex <= config.maxIcons do
+    local aura = ns.Auras.Read(unit, auraIndex, options.filter, options)
+    if not aura then
+      break
+    end
+
+    if ns.Auras.Matches(aura, options) then
+      local button = buttons[iconIndex]
+      if RenderButtonAura(unitFrame, unit, button, aura, config, options, iconIndex, auraIndex) then
+        iconIndex = iconIndex + 1
+      end
+    end
+
+    auraIndex = auraIndex + 1
+  end
+
+  FinishRender(moduleKey, unitFrame, buttons, backing, config, iconIndex)
+end
+
+function Frames.RenderAuraList(moduleKey, unitFrame, unit, auras, options)
+  if not unitFrame or Frames.IsForbidden(unitFrame) then
+    return
+  end
+
+  local config = GetConfig(options)
+  local buttons = EnsureButtons(moduleKey, unitFrame, config)
+  if not buttons then
+    return
+  end
+
+  local backing = EnsureBacking(moduleKey, unitFrame, config)
+  local iconIndex = 1
+
+  for _, aura in ipairs(auras or {}) do
+    if iconIndex > config.maxIcons then
+      break
+    end
+
+    local button = buttons[iconIndex]
+    if RenderButtonAura(unitFrame, unit, button, aura, config, options, iconIndex, nil) then
+      iconIndex = iconIndex + 1
+    end
+  end
+
+  FinishRender(moduleKey, unitFrame, buttons, backing, config, iconIndex)
 end
 
 function Frames.RenderTestIcon(moduleKey, unitFrame, options)

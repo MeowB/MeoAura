@@ -20,6 +20,7 @@ local cooldownFrameSetHooked = false
 local cooldownMixinHooked = false
 local ReplayNativeCooldown
 local ScheduleStyle
+local SetBlizzardAurasShown
 local cooldownCaptureStats = {
   calls = 0,
   noParent = 0,
@@ -61,16 +62,17 @@ local function GetOptions()
 end
 
 local function GetFriendlyHotOptions()
-  local settings = ns.GetSettings("nameplateDebuffs")
+  local debuffSettings = ns.GetSettings("nameplateDebuffs")
+  local settings = ns.GetSettings("nameplateHots")
   return {
     filter = "HELPFUL",
     categories = ns.GetEnabledCategories({ "hots", "externals", "utility" }),
     onlyPlayer = true,
     requirePlayerSource = true,
     iconSize = settings.iconSize,
-    maxIcons = settings.maxIcons,
+    maxIcons = debuffSettings.maxIcons,
     maxScan = 40,
-    cooldownText = settings.cooldownText,
+    cooldownText = debuffSettings.cooldownText,
     preferLegacy = true,
     point = "BOTTOMLEFT",
     relativePoint = "TOPLEFT",
@@ -82,6 +84,26 @@ local function GetFriendlyHotOptions()
       return unitFrame.healthBar or unitFrame
     end,
   }
+end
+
+local function FriendlyNameplateHotsEnabled()
+  local settings = ns.GetSettings("nameplateHots")
+  return settings and settings.enabled == true and #ns.GetEnabledCategories({ "hots", "externals", "utility" }) > 0
+end
+
+local function NameplateModuleActive()
+  return ns.GetSettings("nameplateDebuffs").enabled == true or FriendlyNameplateHotsEnabled()
+end
+
+local function RenderFriendlyNameplateAuras(unitFrame, unit)
+  ns.Trace("Nameplates RenderFriendly " .. tostring(unit))
+  if FriendlyNameplateHotsEnabled() then
+    SetBlizzardAurasShown(unitFrame, false)
+    ns.Frames.RenderAuras("nameplateDebuffs", unitFrame, unit, GetFriendlyHotOptions())
+  else
+    ns.Frames.Clear("nameplateDebuffs", unitFrame)
+    SetBlizzardAurasShown(unitFrame, true)
+  end
 end
 
 local function GetNamePlateUnitFrame(unit)
@@ -124,19 +146,8 @@ local function FindUnitForNamePlate(namePlate, unitFrame)
   end
 end
 
-local function SetBlizzardAurasShown(unitFrame, shown)
-  local auraFrame = unitFrame and unitFrame.AurasFrame
-  if not auraFrame then
-    return
-  end
-
-  if shown then
-    pcall(auraFrame.SetAlpha, auraFrame, 1)
-    pcall(auraFrame.Show, auraFrame)
-  else
-    pcall(auraFrame.SetAlpha, auraFrame, 0)
-    pcall(auraFrame.Show, auraFrame)
-  end
+function SetBlizzardAurasShown(unitFrame, shown)
+  ns.Trace("Nameplates SetBlizzardAurasShown " .. ns.Frames.SafeName(unitFrame) .. " " .. tostring(shown))
 end
 
 local function IsCooldownFrame(frame)
@@ -260,6 +271,7 @@ local function StyleNativeAuraButton(button, size)
 end
 
 local function StyleNativeAuraButtons(unitFrame)
+  ns.Trace("Nameplates StyleNativeAuraButtons " .. ns.Frames.SafeName(unitFrame))
   local settings = ns.GetSettings("nameplateDebuffs")
   local auraFrame = unitFrame and unitFrame.AurasFrame
   if not auraFrame then
@@ -542,31 +554,27 @@ function ReplayNativeCooldown(unitFrame, iconIndex, aura, cooldown, unit)
 end
 
 local function RenderNameplateAuras(unitFrame, unit)
-  if not unit then
-    ns.Frames.Clear("nameplateDebuffs", unitFrame)
-    SetBlizzardAurasShown(unitFrame, true)
+  ns.Trace("Nameplates RenderNameplateAuras " .. tostring(unit) .. " " .. ns.Frames.SafeName(unitFrame))
+  if not NameplateModuleActive() then
     return
   end
 
-  if not ns.GetSettings("nameplateDebuffs").enabled then
-    ns.Frames.Clear("nameplateDebuffs", unitFrame)
-    SetBlizzardAurasShown(unitFrame, true)
+  if not unit then
     return
   end
 
   if UnitCanAttack and UnitCanAttack("player", unit) then
-    ns.Frames.Clear("nameplateDebuffs", unitFrame)
-    StyleNativeAuraButtons(unitFrame)
-  elseif #ns.GetEnabledCategories({ "hots", "externals", "utility" }) > 0 then
-    SetBlizzardAurasShown(unitFrame, false)
-    ns.Frames.RenderAuras("nameplateDebuffs", unitFrame, unit, GetFriendlyHotOptions())
-  else
-    ns.Frames.Clear("nameplateDebuffs", unitFrame)
-    SetBlizzardAurasShown(unitFrame, true)
+    if ns.GetSettings("nameplateDebuffs").enabled then
+      ns.Frames.Clear("nameplateDebuffs", unitFrame)
+      StyleNativeAuraButtons(unitFrame)
+    end
+  elseif UnitIsFriend and UnitIsFriend("player", unit) then
+    RenderFriendlyNameplateAuras(unitFrame, unit)
   end
 end
 
 function ScheduleStyle(unitFrame, unit)
+  ns.Trace("Nameplates ScheduleStyle " .. tostring(unit) .. " " .. ns.Frames.SafeName(unitFrame))
   unit = unit or unitsByFrame[unitFrame] or ns.Frames.GetUnit(unitFrame)
 
   RenderNameplateAuras(unitFrame, unit)
@@ -582,6 +590,11 @@ function ScheduleStyle(unitFrame, unit)
 end
 
 function NameplateDebuffs:UpdateUnit(unit)
+  ns.Trace("Nameplates UpdateUnit " .. tostring(unit))
+  if not NameplateModuleActive() then
+    return
+  end
+
   if not unit or not string.match(unit, "^nameplate%d+$") then
     return
   end
@@ -594,26 +607,22 @@ function NameplateDebuffs:UpdateUnit(unit)
   unitsByFrame[unitFrame] = unit
   framesByUnit[unit] = unitFrame
 
-  if not ns.GetSettings("nameplateDebuffs").enabled then
-    ns.Frames.Clear("nameplateDebuffs", unitFrame)
-    SetBlizzardAurasShown(unitFrame, true)
-    return
-  end
-
   if UnitCanAttack and UnitCanAttack("player", unit) then
-    ScheduleStyle(unitFrame, unit)
-  else
-    if #ns.GetEnabledCategories({ "hots", "externals", "utility" }) > 0 then
-      SetBlizzardAurasShown(unitFrame, false)
-      ns.Frames.RenderAuras("nameplateDebuffs", unitFrame, unit, GetFriendlyHotOptions())
-    else
-      ns.Frames.Clear("nameplateDebuffs", unitFrame)
-      SetBlizzardAurasShown(unitFrame, true)
+    if ns.GetSettings("nameplateDebuffs").enabled then
+      ScheduleStyle(unitFrame, unit)
     end
+  elseif UnitIsFriend and UnitIsFriend("player", unit) then
+    RenderFriendlyNameplateAuras(unitFrame, unit)
   end
 end
 
 function NameplateDebuffs:ClearUnit(unit)
+  ns.Trace("Nameplates ClearUnit " .. tostring(unit))
+  if not NameplateModuleActive() then
+    framesByUnit[unit] = nil
+    return
+  end
+
   local unitFrame = GetNamePlateUnitFrame(unit) or framesByUnit[unit]
   if unitFrame then
     ns.Frames.Clear("nameplateDebuffs", unitFrame)
@@ -624,9 +633,15 @@ function NameplateDebuffs:ClearUnit(unit)
 end
 
 function NameplateDebuffs:OnLogin()
-  ns.RegisterEvent("NAME_PLATE_UNIT_ADDED")
-  ns.RegisterEvent("NAME_PLATE_UNIT_REMOVED")
-  ns.RegisterEvent("UNIT_AURA")
+  ns.Trace("Nameplates OnLogin debuffs=" .. tostring(ns.GetSettings("nameplateDebuffs").enabled) .. " hots=" .. tostring(ns.GetSettings("nameplateHots").enabled))
+  if not NameplateModuleActive() then
+    ns.Trace("Nameplates OnLogin disabled")
+    return
+  end
+
+  ns.RegisterEvent("nameplateDebuffs", "NAME_PLATE_UNIT_ADDED")
+  ns.RegisterEvent("nameplateDebuffs", "NAME_PLATE_UNIT_REMOVED")
+  ns.RegisterEvent("nameplateDebuffs", "UNIT_AURA")
 
   if not compactAuraHooked and type(CompactUnitFrame_UpdateAuras) == "function" then
     compactAuraHooked = true
@@ -639,6 +654,11 @@ function NameplateDebuffs:OnLogin()
 end
 
 function NameplateDebuffs:ApplySettings()
+  ns.Trace("Nameplates ApplySettings")
+  if not NameplateModuleActive() then
+    return
+  end
+
   if not C_NamePlate or not C_NamePlate.GetNamePlates then
     return
   end
@@ -646,9 +666,10 @@ function NameplateDebuffs:ApplySettings()
   for _, namePlate in ipairs(C_NamePlate.GetNamePlates()) do
     local unitFrame = namePlate.UnitFrame or namePlate
     local unit = FindUnitForNamePlate(namePlate, unitFrame)
+    ns.Trace("Nameplates ApplySettings plate " .. tostring(unit) .. " " .. ns.Frames.SafeName(unitFrame))
     if unit then
       self:UpdateUnit(unit)
-    elseif not ns.GetSettings("nameplateDebuffs").enabled then
+    elseif not ns.GetSettings("nameplateDebuffs").enabled and not FriendlyNameplateHotsEnabled() then
       ns.Frames.Clear("nameplateDebuffs", unitFrame)
       SetBlizzardAurasShown(unitFrame, true)
     elseif unitFrame then

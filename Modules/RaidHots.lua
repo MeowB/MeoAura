@@ -17,6 +17,8 @@ local function GetOptions()
     maxIcons = settings.maxIcons,
     maxScan = 40,
     cooldownText = settings.cooldownText,
+    captureMouse = true,
+    tooltips = settings.tooltips,
     point = "BOTTOMRIGHT",
     growth = "LEFT",
     x = -1,
@@ -26,9 +28,9 @@ end
 
 function RaidHots:UpdateFrame(unitFrame)
   if not ns.GetSettings("raidHots").enabled then
-    ns.Frames.Clear("raidHots", unitFrame)
     return
   end
+  ns.Trace("RaidHots UpdateFrame " .. ns.Frames.SafeName(unitFrame))
 
   if not ns.Frames.IsCompactGroupFrame(unitFrame) then
     return
@@ -38,12 +40,14 @@ function RaidHots:UpdateFrame(unitFrame)
 end
 
 function RaidHots:UpdateAll()
+  ns.Trace("RaidHots UpdateAll")
   ns.Frames.ForEachCompactGroupFrame(function(unitFrame)
     self:UpdateFrame(unitFrame)
   end)
 end
 
 function RaidHots:QueueUpdateAll()
+  ns.Trace("RaidHots QueueUpdateAll")
   if updateQueued then
     return
   end
@@ -56,6 +60,12 @@ function RaidHots:QueueUpdateAll()
 end
 
 function RaidHots:OnLogin()
+  ns.Trace("RaidHots OnLogin enabled=" .. tostring(ns.GetSettings("raidHots").enabled))
+  if not ns.GetSettings("raidHots").enabled then
+    ns.Trace("RaidHots OnLogin disabled")
+    return
+  end
+
   if type(CompactUnitFrame_UpdateAuras) == "function" then
     hooksecurefunc("CompactUnitFrame_UpdateAuras", function(unitFrame)
       self:UpdateFrame(unitFrame)
@@ -74,20 +84,35 @@ function RaidHots:OnLogin()
     end)
   end
 
-  ns.RegisterEvent("GROUP_ROSTER_UPDATE")
-  ns.RegisterEvent("UNIT_AURA")
+  ns.RegisterEvent("raidHots", "GROUP_ROSTER_UPDATE")
+  ns.RegisterEvent("raidHots", "UNIT_AURA")
   self:UpdateAll()
 end
 
 function RaidHots:ApplySettings()
+  ns.Trace("RaidHots ApplySettings")
+  if not ns.GetSettings("raidHots").enabled then
+    return
+  end
+
   self:UpdateAll()
 end
 
 function RaidHots:GROUP_ROSTER_UPDATE()
+  ns.Trace("RaidHots GROUP_ROSTER_UPDATE")
+  if not ns.GetSettings("raidHots").enabled then
+    return
+  end
+
   self:QueueUpdateAll()
 end
 
 function RaidHots:UNIT_AURA(unit)
+  ns.Trace("RaidHots UNIT_AURA " .. tostring(unit))
+  if not ns.GetSettings("raidHots").enabled then
+    return
+  end
+
   ns.Frames.ForEachCompactGroupFrame(function(unitFrame)
     if unit == ns.Frames.GetUnit(unitFrame) then
       self:UpdateFrame(unitFrame)
@@ -113,6 +138,7 @@ function RaidHots:Debug()
     "enabled: " .. tostring(settings.enabled),
     "iconSize: " .. tostring(settings.iconSize),
     "maxIcons: " .. tostring(settings.maxIcons),
+    "tooltips: " .. tostring(settings.tooltips),
   }
 
   for _, frameName in ipairs({ "CompactPartyFrameMember1", "CompactPartyFrameMember2", "CompactRaidFrame1" }) do

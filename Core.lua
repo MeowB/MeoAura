@@ -3,11 +3,29 @@ local ADDON_NAME, ns = ...
 ns.name = "MeoAura"
 ns.displayName = "Meo Aura"
 ns.modules = {}
+ns.traceLog = {}
+ns.eventOwners = {}
 
 MeoAura = ns
 
 local addonFrame = CreateFrame("Frame")
 ns.frame = addonFrame
+
+function ns.Trace(message)
+  ns.traceLog[#ns.traceLog + 1] = string.format("%.3f %s", GetTime and GetTime() or 0, tostring(message))
+  if #ns.traceLog > 80 then
+    table.remove(ns.traceLog, 1)
+  end
+end
+
+function ns.DumpTrace()
+  local lines = { ns.displayName .. " trace" }
+  for _, entry in ipairs(ns.traceLog) do
+    lines[#lines + 1] = entry
+  end
+
+  error(table.concat(lines, "\n"), 0)
+end
 
 local DEFAULTS = {
   categories = {
@@ -21,6 +39,7 @@ local DEFAULTS = {
     iconSize = 24,
     maxIcons = 5,
     cooldownText = false,
+    tooltips = true,
   },
   arenaDebuffs = {
     enabled = false,
@@ -35,6 +54,10 @@ local DEFAULTS = {
     maxIcons = 8,
     onlyPlayer = true,
     cooldownText = false,
+  },
+  nameplateHots = {
+    enabled = true,
+    iconSize = 24,
   },
 }
 
@@ -76,22 +99,59 @@ function ns.RegisterModule(moduleKey, module)
   ns.modules[moduleKey] = module
 end
 
-function ns.RegisterEvent(event)
+function ns.RegisterEvent(moduleKey, event)
+  if type(event) ~= "string" then
+    event = moduleKey
+    moduleKey = nil
+  end
+
+  if type(event) ~= "string" then
+    return
+  end
+
+  local owners = ns.eventOwners[event]
+  if not owners then
+    owners = {}
+    ns.eventOwners[event] = owners
+  end
+
+  if type(moduleKey) == "string" then
+    owners[moduleKey] = true
+  end
+
   addonFrame:RegisterEvent(event)
 end
 
 function ns.ApplySettings()
-  for _, module in pairs(ns.modules) do
+  ns.Trace("ApplySettings start")
+  for moduleKey, module in pairs(ns.modules) do
     if type(module.ApplySettings) == "function" then
+      ns.Trace("ApplySettings " .. tostring(moduleKey))
       module:ApplySettings()
     end
   end
+  ns.Trace("ApplySettings done")
 end
 
 local function Dispatch(event, ...)
-  for _, module in pairs(ns.modules) do
+  ns.Trace("Dispatch " .. tostring(event))
+  local owners = ns.eventOwners[event]
+  if owners then
+    for moduleKey in pairs(owners) do
+      local module = ns.modules[moduleKey]
+      local handler = module and module[event]
+      if type(handler) == "function" then
+        ns.Trace("Dispatch " .. tostring(event) .. " -> " .. tostring(moduleKey))
+        handler(module, ...)
+      end
+    end
+    return
+  end
+
+  for moduleKey, module in pairs(ns.modules) do
     local handler = module[event]
     if type(handler) == "function" then
+      ns.Trace("Dispatch legacy " .. tostring(event) .. " -> " .. tostring(moduleKey))
       handler(module, ...)
     end
   end
@@ -138,12 +198,24 @@ local function SetModuleCooldownText(moduleKey, enabled)
   return true
 end
 
+local function SetModuleTooltips(moduleKey, enabled)
+  local settings = ns.GetSettings(moduleKey)
+  if not settings then
+    return false
+  end
+
+  settings.tooltips = enabled
+  ns.ApplySettings()
+  return true
+end
+
 function ns.PrintSettings()
   print(ns.displayName .. " Settings")
   print("  categories: hots=" .. tostring(ns.GetCategories().hots) .. ", dots=" .. tostring(ns.GetCategories().dots) .. ", externals=" .. tostring(ns.GetCategories().externals) .. ", utility=" .. tostring(ns.GetCategories().utility))
-  print("  raid hots: " .. tostring(ns.GetSettings("raidHots").enabled) .. ", size " .. tostring(ns.GetSettings("raidHots").iconSize) .. ", count " .. tostring(ns.GetSettings("raidHots").maxIcons) .. ", cooldown text " .. tostring(ns.GetSettings("raidHots").cooldownText))
+  print("  raid hots: " .. tostring(ns.GetSettings("raidHots").enabled) .. ", size " .. tostring(ns.GetSettings("raidHots").iconSize) .. ", count " .. tostring(ns.GetSettings("raidHots").maxIcons) .. ", cooldown text " .. tostring(ns.GetSettings("raidHots").cooldownText) .. ", tooltips " .. tostring(ns.GetSettings("raidHots").tooltips))
   print("  arena debuffs: " .. tostring(ns.GetSettings("arenaDebuffs").enabled) .. ", size " .. tostring(ns.GetSettings("arenaDebuffs").iconSize) .. ", count " .. tostring(ns.GetSettings("arenaDebuffs").maxIcons) .. ", cooldown text " .. tostring(ns.GetSettings("arenaDebuffs").cooldownText))
   print("  nameplate debuffs: " .. tostring(ns.GetSettings("nameplateDebuffs").enabled) .. ", size " .. tostring(ns.GetSettings("nameplateDebuffs").iconSize) .. ", count " .. tostring(ns.GetSettings("nameplateDebuffs").maxIcons) .. ", cooldown text " .. tostring(ns.GetSettings("nameplateDebuffs").cooldownText))
+  print("  friendly nameplate hots: " .. tostring(ns.GetSettings("nameplateHots").enabled) .. ", size " .. tostring(ns.GetSettings("nameplateHots").iconSize))
 end
 
 local function HandleSlash(input)
@@ -172,6 +244,10 @@ local function HandleSlash(input)
       SetModuleCooldownText("raidHots", true)
     elseif rest == "text off" then
       SetModuleCooldownText("raidHots", false)
+    elseif rest == "tooltips on" or rest == "tooltip on" then
+      SetModuleTooltips("raidHots", true)
+    elseif rest == "tooltips off" or rest == "tooltip off" then
+      SetModuleTooltips("raidHots", false)
     else
       SetModuleEnabled("raidHots", rest ~= "off")
     end
@@ -188,8 +264,11 @@ local function HandleSlash(input)
     end
   elseif command == "nameplate" or command == "plates" then
     local size = tonumber(string.match(rest, "^size%s+(%d+)$"))
+    local hotSize = tonumber(string.match(rest, "^hots%s+size%s+(%d+)$")) or tonumber(string.match(rest, "^hot%s+size%s+(%d+)$"))
     local count = tonumber(string.match(rest, "^count%s+(%d+)$"))
-    if size then
+    if hotSize then
+      SetModuleIconSize("nameplateHots", hotSize)
+    elseif size then
       SetModuleIconSize("nameplateDebuffs", size)
     elseif count then
       SetModuleIconCount("nameplateDebuffs", count)
@@ -201,6 +280,10 @@ local function HandleSlash(input)
       if ns.NameplateDebuffs and ns.NameplateDebuffs.ShowTestIcons then
         ns.NameplateDebuffs:ShowTestIcons()
       end
+    elseif rest == "hots on" or rest == "hot on" then
+      SetModuleEnabled("nameplateHots", true)
+    elseif rest == "hots off" or rest == "hot off" then
+      SetModuleEnabled("nameplateHots", false)
     elseif rest == "all" then
       ns.GetSettings("nameplateDebuffs").onlyPlayer = false
       ns.ApplySettings()
@@ -212,6 +295,9 @@ local function HandleSlash(input)
     end
   elseif command == "status" then
     ns.PrintSettings()
+    return
+  elseif command == "trace" then
+    ns.DumpTrace()
     return
   elseif command == "category" then
     local category, state = string.match(rest, "^(%S+)%s+(%S+)$")
@@ -228,20 +314,24 @@ local function HandleSlash(input)
 end
 
 local function OnLogin()
+  ns.Trace("OnLogin start")
   MeoAuraDB = MeoAuraDB or {}
   CopyDefaults(DEFAULTS, MeoAuraDB)
 
   if ns.Config and ns.Config.Create then
+    ns.Trace("Config Create")
     ns.Config:Create()
   end
 
-  for _, module in pairs(ns.modules) do
+  for moduleKey, module in pairs(ns.modules) do
     if type(module.OnLogin) == "function" then
+      ns.Trace("OnLogin module " .. tostring(moduleKey))
       module:OnLogin()
     end
   end
 
   ns.ApplySettings()
+  ns.Trace("OnLogin done")
   print("MeoAura loaded")
 end
 

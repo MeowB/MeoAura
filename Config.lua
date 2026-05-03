@@ -9,6 +9,7 @@ local MODULE_LABELS = {
   raidHots = "Raid HoTs",
   arenaDebuffs = "Arena debuffs",
   nameplateDebuffs = "Nameplate debuffs",
+  nameplateHots = "Friendly nameplate HoTs",
 }
 
 local CATEGORY_LABELS = {
@@ -18,13 +19,34 @@ local CATEGORY_LABELS = {
   utility = "Utility buffs",
 }
 
+local SECTION_DESCRIPTIONS = {
+  raid = "Show your tracked HoTs, externals, and utility buffs on Blizzard party and raid frames.",
+  nameplates = "Tune enemy nameplate debuffs separately from your helpful buffs on friendly nameplates.",
+  arena = "Experimental enemy arena aura display while the combat-log tracker is still being rebuilt.",
+  categories = "Choose which tracked aura groups are eligible for the enabled modules.",
+}
+
 local function ControlName(moduleKey, suffix)
   return "MeoAura" .. moduleKey .. suffix
 end
 
-local function CreateCheckbox(parent, moduleKey, y)
+local function CreateSection(parent, title, description, x, y)
+  local titleText = parent:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
+  titleText:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
+  titleText:SetText(title)
+
+  local descriptionText = parent:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+  descriptionText:SetPoint("TOPLEFT", titleText, "BOTTOMLEFT", 0, -4)
+  descriptionText:SetWidth(300)
+  descriptionText:SetJustifyH("LEFT")
+  descriptionText:SetText(description)
+
+  return titleText, descriptionText
+end
+
+local function CreateCheckbox(parent, moduleKey, x, y)
   local checkbox = CreateFrame("CheckButton", ControlName(moduleKey, "Enabled"), parent, "InterfaceOptionsCheckButtonTemplate")
-  checkbox:SetPoint("TOPLEFT", parent, "TOPLEFT", 16, y)
+  checkbox:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
   local label = _G[checkbox:GetName() .. "Text"] or checkbox.Text
   if label then
     label:SetText(MODULE_LABELS[moduleKey])
@@ -39,9 +61,9 @@ local function CreateCheckbox(parent, moduleKey, y)
   end
 end
 
-local function CreateSlider(parent, moduleKey, y)
+local function CreateSlider(parent, moduleKey, x, y, label)
   local slider = CreateFrame("Slider", ControlName(moduleKey, "IconSize"), parent, "OptionsSliderTemplate")
-  slider:SetPoint("TOPLEFT", parent, "TOPLEFT", 32, y)
+  slider:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
   local minValue = moduleKey == "raidHots" and 22 or 12
   slider:SetMinMaxValues(minValue, 48)
   slider:SetValueStep(1)
@@ -52,7 +74,7 @@ local function CreateSlider(parent, moduleKey, y)
   local low = _G[slider:GetName() .. "Low"] or slider.Low
   local high = _G[slider:GetName() .. "High"] or slider.High
   if text then
-    text:SetText(MODULE_LABELS[moduleKey] .. " icon size")
+    text:SetText(label or MODULE_LABELS[moduleKey] .. " icon size")
   end
   if low then
     low:SetText(tostring(minValue))
@@ -70,9 +92,9 @@ local function CreateSlider(parent, moduleKey, y)
   end
 end
 
-local function CreateCooldownTextCheckbox(parent, moduleKey, y)
+local function CreateCooldownTextCheckbox(parent, moduleKey, x, y)
   local checkbox = CreateFrame("CheckButton", ControlName(moduleKey, "CooldownText"), parent, "InterfaceOptionsCheckButtonTemplate")
-  checkbox:SetPoint("TOPLEFT", parent, "TOPLEFT", 32, y)
+  checkbox:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
   local label = _G[checkbox:GetName() .. "Text"] or checkbox.Text
   if label then
     label:SetText(MODULE_LABELS[moduleKey] .. " cooldown text")
@@ -87,9 +109,26 @@ local function CreateCooldownTextCheckbox(parent, moduleKey, y)
   end
 end
 
-local function CreateCategoryCheckbox(parent, categoryKey, y)
+local function CreateTooltipsCheckbox(parent, moduleKey, x, y)
+  local checkbox = CreateFrame("CheckButton", ControlName(moduleKey, "Tooltips"), parent, "InterfaceOptionsCheckButtonTemplate")
+  checkbox:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
+  local label = _G[checkbox:GetName() .. "Text"] or checkbox.Text
+  if label then
+    label:SetText(MODULE_LABELS[moduleKey] .. " tooltips")
+  end
+  checkbox:SetScript("OnClick", function(self)
+    ns.GetSettings(moduleKey).tooltips = self:GetChecked()
+    ns.ApplySettings()
+  end)
+
+  parent.controls[#parent.controls + 1] = function()
+    checkbox:SetChecked(ns.GetSettings(moduleKey).tooltips)
+  end
+end
+
+local function CreateCategoryCheckbox(parent, categoryKey, x, y)
   local checkbox = CreateFrame("CheckButton", ControlName("Category" .. categoryKey, "Enabled"), parent, "InterfaceOptionsCheckButtonTemplate")
-  checkbox:SetPoint("TOPLEFT", parent, "TOPLEFT", 280, y)
+  checkbox:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
   local label = _G[checkbox:GetName() .. "Text"] or checkbox.Text
   if label then
     label:SetText(CATEGORY_LABELS[categoryKey])
@@ -106,7 +145,7 @@ end
 
 local function CreateSaveButton(parent)
   local button = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
-  button:SetPoint("TOPLEFT", parent, "TOPLEFT", 16, -382)
+  button:SetPoint("TOPLEFT", parent, "TOPLEFT", 16, -552)
   button:SetSize(160, 24)
   button:SetText("Apply Settings")
   button:SetScript("OnClick", function()
@@ -130,24 +169,29 @@ function Config:Create()
   title:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -16)
   title:SetText(ns.displayName)
 
-  CreateCheckbox(panel, "raidHots", -52)
-  CreateSlider(panel, "raidHots", -88)
-  CreateCooldownTextCheckbox(panel, "raidHots", -122)
-  CreateCheckbox(panel, "arenaDebuffs", -158)
-  CreateSlider(panel, "arenaDebuffs", -194)
-  CreateCooldownTextCheckbox(panel, "arenaDebuffs", -228)
-  CreateCheckbox(panel, "nameplateDebuffs", -264)
-  CreateSlider(panel, "nameplateDebuffs", -300)
-  CreateCooldownTextCheckbox(panel, "nameplateDebuffs", -334)
+  CreateSection(panel, "Raid Frames", SECTION_DESCRIPTIONS.raid, 16, -52)
+  CreateCheckbox(panel, "raidHots", 16, -100)
+  CreateSlider(panel, "raidHots", 32, -136, "Raid frame icon size")
+  CreateCooldownTextCheckbox(panel, "raidHots", 32, -170)
+  CreateTooltipsCheckbox(panel, "raidHots", 32, -202)
 
-  local categoryTitle = panel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
-  categoryTitle:SetPoint("TOPLEFT", panel, "TOPLEFT", 280, -52)
-  categoryTitle:SetText("Aura Categories")
+  CreateSection(panel, "Nameplates", SECTION_DESCRIPTIONS.nameplates, 16, -246)
+  CreateCheckbox(panel, "nameplateDebuffs", 16, -294)
+  CreateSlider(panel, "nameplateDebuffs", 32, -330, "Enemy debuff icon size")
+  CreateCooldownTextCheckbox(panel, "nameplateDebuffs", 32, -364)
+  CreateCheckbox(panel, "nameplateHots", 16, -396)
+  CreateSlider(panel, "nameplateHots", 32, -432, "Friendly buff icon size")
 
-  CreateCategoryCheckbox(panel, "hots", -82)
-  CreateCategoryCheckbox(panel, "dots", -114)
-  CreateCategoryCheckbox(panel, "externals", -146)
-  CreateCategoryCheckbox(panel, "utility", -178)
+  CreateSection(panel, "Arena Frames", SECTION_DESCRIPTIONS.arena, 360, -52)
+  CreateCheckbox(panel, "arenaDebuffs", 360, -100)
+  CreateSlider(panel, "arenaDebuffs", 376, -136, "Arena debuff icon size")
+  CreateCooldownTextCheckbox(panel, "arenaDebuffs", 376, -170)
+
+  CreateSection(panel, "Aura Categories", SECTION_DESCRIPTIONS.categories, 360, -246)
+  CreateCategoryCheckbox(panel, "hots", 360, -294)
+  CreateCategoryCheckbox(panel, "dots", 360, -326)
+  CreateCategoryCheckbox(panel, "externals", 360, -358)
+  CreateCategoryCheckbox(panel, "utility", 360, -390)
   CreateSaveButton(panel)
 
   panel:SetScript("OnShow", function(self)

@@ -3,7 +3,29 @@ local _, ns = ...
 local ArenaDebuffs = {}
 ns.ArenaDebuffs = ArenaDebuffs
 
-local function GetOptions()
+local AURA_CACHE_TTL = 45
+local auraCacheByGUID = {}
+local preparedFrames = setmetatable({}, { __mode = "k" })
+local updateAfterCombat = false
+local traceLog = {}
+local cacheStats = {
+  seen = 0,
+  tracked = 0,
+  removed = 0,
+  restrictedGUID = 0,
+  ignoredSource = 0,
+  ignoredAuraType = 0,
+  ignoredSpell = 0,
+}
+
+local function Trace(message)
+  traceLog[#traceLog + 1] = string.format("%.3f %s", GetTime and GetTime() or 0, tostring(message))
+  if #traceLog > 30 then
+    table.remove(traceLog, 1)
+  end
+end
+
+local function GetOptions(skipLayout)
   local settings = ns.GetSettings("arenaDebuffs")
   return {
     filter = "HARMFUL",
@@ -15,17 +37,233 @@ local function GetOptions()
     cooldownText = settings.cooldownText,
     requireDuration = false,
     preferLegacy = true,
-    allowRestrictedAura = true,
+    allowRestrictedAura = false,
     point = "TOPRIGHT",
     relativePoint = "TOPRIGHT",
     growth = "LEFT",
     x = -1,
     y = 1,
     backingAlpha = 0.75,
+    skipCreate = skipLayout,
+    skipLayout = skipLayout,
     anchorFrame = function(unitFrame)
       return unitFrame.healthBar or unitFrame
     end,
   }
+end
+
+local function GetSpellIcon(spellId)
+  if C_Spell and type(C_Spell.GetSpellTexture) == "function" then
+    local ok, icon = pcall(C_Spell.GetSpellTexture, spellId)
+    if ok and icon then
+      return icon
+    end
+  end
+
+  if type(GetSpellTexture) == "function" then
+    local ok, icon = pcall(GetSpellTexture, spellId)
+    if ok and icon then
+      return icon
+    end
+  end
+end
+
+local function SafeUnitGUID(unit)
+  if not UnitGUID or type(unit) ~= "string" then
+    return nil
+  end
+
+  local ok, guid = pcall(UnitGUID, unit)
+  if ok and type(guid) == "string" then
+    return guid
+  end
+end
+
+local function GetPlayerSourceGUIDs()
+  local guids = {}
+  local playerGUID = SafeUnitGUID("player")
+  local petGUID = SafeUnitGUID("pet")
+
+  if type(playerGUID) == "string" then
+    guids[playerGUID] = true
+  end
+  if type(petGUID) == "string" then
+    guids[petGUID] = true
+  end
+
+  return guids
+end
+
+local function IsPlayerSource(sourceGUID)
+  return GetPlayerSourceGUIDs()[sourceGUID] == true
+end
+
+local function SafeCacheGet(key)
+  if type(key) ~= "string" then
+    return nil
+  end
+
+  local ok, value = pcall(function()
+    return auraCacheByGUID[key]
+  end)
+
+  if ok then
+    return value
+  end
+
+  cacheStats.restrictedGUID = cacheStats.restrictedGUID + 1
+end
+
+local function SafeCacheSet(key, value)
+  if type(key) ~= "string" then
+    return false
+  end
+
+  local ok = pcall(function()
+    auraCacheByGUID[key] = value
+  end)
+
+  if ok then
+    return true
+  end
+
+  cacheStats.restrictedGUID = cacheStats.restrictedGUID + 1
+  return false
+end
+
+local function GetCacheForGUID(destGUID)
+  if type(destGUID) ~= "string" then
+    return nil
+  end
+
+  local cache = SafeCacheGet(destGUID)
+  if not cache then
+    cache = {}
+    if not SafeCacheSet(destGUID, cache) then
+      return nil
+    end
+  end
+
+  return cache
+end
+
+local function IsTrackedCombatAura(spellId, spellName)
+  local aura = {
+    spellId = spellId,
+    name = spellName,
+    icon = GetSpellIcon(spellId) or "Interface\\Icons\\INV_Misc_QuestionMark",
+  }
+
+  return ns.Auras.IsTrackedAura(aura, ns.GetEnabledCategories({ "dots", "utility" })) and not ns.Auras.IsDenylisted(aura)
+end
+
+local function StoreCombatAura(destGUID, spellId, spellName, applications, sourceGUID)
+  local cache = GetCacheForGUID(destGUID)
+  if not cache then
+    return
+  end
+
+  cache[spellId] = {
+    name = spellName,
+    spellId = spellId,
+    icon = GetSpellIcon(spellId) or "Interface\\Icons\\INV_Misc_QuestionMark",
+    applications = applications or 0,
+    sourceGUID = sourceGUID,
+    appliedAt = GetTime and GetTime() or 0,
+  }
+  cacheStats.tracked = cacheStats.tracked + 1
+  Trace("cache store " .. tostring(spellName) .. " " .. tostring(spellId))
+end
+
+local function ClearCache()
+  auraCacheByGUID = {}
+end
+
+local function RemoveCombatAura(destGUID, spellId)
+  local cache = SafeCacheGet(destGUID)
+  if cache and cache[spellId] then
+    cache[spellId] = nil
+    cacheStats.removed = cacheStats.removed + 1
+    Trace("cache remove " .. tostring(spellId))
+  end
+end
+
+local function PruneCacheForGUID(destGUID)
+  local cache = SafeCacheGet(destGUID)
+  local now = GetTime and GetTime() or 0
+  if not cache then
+    return
+  end
+
+  for spellId, aura in pairs(cache) do
+    local expirationTime = ns.Auras.SafeField(aura, "expirationTime")
+    local appliedAt = ns.Auras.SafeField(aura, "appliedAt") or now
+    if (type(expirationTime) == "number" and expirationTime > 0 and expirationTime <= now) or (expirationTime == nil and now - appliedAt > AURA_CACHE_TTL) then
+      cache[spellId] = nil
+    end
+  end
+end
+
+local function EnrichCachedAuras(unit, cache)
+  if type(unit) ~= "string" or not UnitExists(unit) then
+    return
+  end
+
+  local scanOptions = {
+    onlyPlayer = true,
+    preferLegacy = true,
+    requireDuration = false,
+  }
+
+  for auraIndex = 1, 40 do
+    local aura = ns.Auras.Read(unit, auraIndex, "HARMFUL", scanOptions)
+    if not aura then
+      break
+    end
+
+    local spellId = ns.Auras.SafeField(aura, "spellId")
+    local cached = cache[spellId]
+    if cached then
+      cached.icon = ns.Auras.GetIcon(aura) or cached.icon
+      cached.duration = ns.Auras.SafeField(aura, "duration")
+      cached.expirationTime = ns.Auras.SafeField(aura, "expirationTime")
+      cached.applications = ns.Auras.SafeField(aura, "applications") or ns.Auras.SafeField(aura, "count") or cached.applications
+      cached.auraInstanceID = ns.Auras.SafeField(aura, "auraInstanceID")
+    end
+  end
+end
+
+local function GetCachedAurasForUnit(unit)
+  local destGUID = SafeUnitGUID(unit)
+  if type(destGUID) ~= "string" then
+    return {}
+  end
+
+  PruneCacheForGUID(destGUID)
+
+  local cache = SafeCacheGet(destGUID)
+  if not cache then
+    return {}
+  end
+
+  EnrichCachedAuras(unit, cache)
+
+  local auras = {}
+  for _, aura in pairs(cache) do
+    auras[#auras + 1] = aura
+  end
+
+  table.sort(auras, function(left, right)
+    local leftExpiration = ns.Auras.SafeField(left, "expirationTime") or math.huge
+    local rightExpiration = ns.Auras.SafeField(right, "expirationTime") or math.huge
+    if leftExpiration == rightExpiration then
+      return (ns.Auras.SafeField(left, "appliedAt") or 0) < (ns.Auras.SafeField(right, "appliedAt") or 0)
+    end
+
+    return leftExpiration < rightExpiration
+  end)
+
+  return auras
 end
 
 local function GetArenaFrame(index)
@@ -184,76 +422,95 @@ local function StyleArenaAuras(unitFrame)
 end
 
 local function RenderArenaAuras(unitFrame, unit)
-  if not ns.GetSettings("arenaDebuffs").enabled then
-    ns.Frames.Clear("arenaDebuffs", unitFrame)
-    SetBlizzardAurasShown(unitFrame, true)
-    return
-  end
-
-  ns.Frames.Clear("arenaDebuffs", unitFrame)
-  StyleArenaAuras(unitFrame)
+  Trace("RenderArenaAuras disabled for cache test " .. tostring(unit))
 end
 
 local function ScheduleRenderArena(unitFrame, unit)
-  RenderArenaAuras(unitFrame, unit)
-  C_Timer.After(0, function()
-    RenderArenaAuras(unitFrame, unit)
-  end)
-  C_Timer.After(0.05, function()
-    RenderArenaAuras(unitFrame, unit)
-  end)
-  C_Timer.After(0.15, function()
-    RenderArenaAuras(unitFrame, unit)
-  end)
+  Trace("ScheduleRenderArena disabled for cache test " .. tostring(unit))
 end
 
 function ArenaDebuffs:UpdateUnit(unit)
-  if not unit or not string.match(unit, "^arena%d+$") then
-    return
-  end
-
-  local index = tonumber(string.match(unit, "^arena(%d+)$"))
-  local unitFrame = index and GetArenaFrame(index)
-  if not unitFrame then
-    return
-  end
-
-  if not ns.GetSettings("arenaDebuffs").enabled then
-    ns.Frames.Clear("arenaDebuffs", unitFrame)
-    SetBlizzardAurasShown(unitFrame, true)
-    return
-  end
-
-  ScheduleRenderArena(unitFrame, unit)
+  Trace("UpdateUnit " .. tostring(unit))
 end
 
 function ArenaDebuffs:UpdateAll()
-  for index = 1, 5 do
-    self:UpdateUnit("arena" .. index)
-  end
+  Trace("UpdateAll disabled for cache test")
 end
 
 function ArenaDebuffs:OnLogin()
-  ns.RegisterEvent("ARENA_OPPONENT_UPDATE")
-  ns.RegisterEvent("PLAYER_ENTERING_WORLD")
-  ns.RegisterEvent("UNIT_AURA")
-  self:UpdateAll()
+  Trace("OnLogin enabled=" .. tostring(ns.GetSettings("arenaDebuffs").enabled))
+  if not ns.GetSettings("arenaDebuffs").enabled then
+    Trace("OnLogin disabled")
+    return
+  end
+
+  ns.RegisterEvent("arenaDebuffs", "COMBAT_LOG_EVENT_UNFILTERED")
+  ns.RegisterEvent("arenaDebuffs", "PLAYER_ENTERING_WORLD")
 end
 
 function ArenaDebuffs:ApplySettings()
-  self:UpdateAll()
+  Trace("ApplySettings")
 end
 
 function ArenaDebuffs:ARENA_OPPONENT_UPDATE(unit)
+  Trace("ARENA_OPPONENT_UPDATE " .. tostring(unit))
   self:UpdateUnit(unit)
 end
 
 function ArenaDebuffs:PLAYER_ENTERING_WORLD()
-  self:UpdateAll()
+  Trace("PLAYER_ENTERING_WORLD clear cache")
+  ClearCache()
+end
+
+function ArenaDebuffs:PLAYER_REGEN_ENABLED()
+  Trace("PLAYER_REGEN_ENABLED")
+  if updateAfterCombat then
+    updateAfterCombat = false
+    self:UpdateAll()
+  end
 end
 
 function ArenaDebuffs:UNIT_AURA(unit)
+  Trace("UNIT_AURA " .. tostring(unit))
   self:UpdateUnit(unit)
+end
+
+function ArenaDebuffs:COMBAT_LOG_EVENT_UNFILTERED()
+  if not CombatLogGetCurrentEventInfo then
+    return
+  end
+
+  local _, subevent, _, sourceGUID, _, _, _, destGUID, _, _, _, spellId, spellName, _, auraType, amount = CombatLogGetCurrentEventInfo()
+
+  if subevent ~= "SPELL_AURA_APPLIED" and subevent ~= "SPELL_AURA_REFRESH" and subevent ~= "SPELL_AURA_APPLIED_DOSE" and subevent ~= "SPELL_AURA_REMOVED" and subevent ~= "SPELL_AURA_REMOVED_DOSE" then
+    return
+  end
+
+  cacheStats.seen = cacheStats.seen + 1
+  Trace("CLEU " .. tostring(subevent) .. " " .. tostring(spellName) .. " " .. tostring(spellId))
+
+  if auraType ~= "DEBUFF" then
+    cacheStats.ignoredAuraType = cacheStats.ignoredAuraType + 1
+    return
+  end
+
+  if not IsPlayerSource(sourceGUID) then
+    cacheStats.ignoredSource = cacheStats.ignoredSource + 1
+    return
+  end
+
+  if not IsTrackedCombatAura(spellId, spellName) then
+    cacheStats.ignoredSpell = cacheStats.ignoredSpell + 1
+    return
+  end
+
+  if subevent == "SPELL_AURA_REMOVED" then
+    RemoveCombatAura(destGUID, spellId)
+  else
+    StoreCombatAura(destGUID, spellId, spellName, amount, sourceGUID)
+  end
+
+  self:UpdateAll()
 end
 
 local function DebugText(value)
@@ -363,10 +620,48 @@ local function DescribeUnitAuras(lines, unit)
   AppendLine(lines, "harmful scanned:", seen, "matched:", matched)
 end
 
+local function CountCachedAuras()
+  local guidCount = 0
+  local auraCount = 0
+
+  for _, cache in pairs(auraCacheByGUID) do
+    guidCount = guidCount + 1
+    for _ in pairs(cache) do
+      auraCount = auraCount + 1
+    end
+  end
+
+  return guidCount, auraCount
+end
+
+local function DescribeCachedAuras(lines, unit)
+  local destGUID = SafeUnitGUID(unit)
+  AppendLine(lines, "cache GUID:", destGUID or "nil")
+  if type(destGUID) ~= "string" then
+    return
+  end
+
+  local auras = GetCachedAurasForUnit(unit)
+  AppendLine(lines, "cached matched auras:", #auras)
+  for index, aura in ipairs(auras) do
+    AppendLine(
+      lines,
+      "  cached",
+      index,
+      "name=", ns.Auras.SafeText(ns.Auras.SafeField(aura, "name") or "nil"),
+      "spellId=", ns.Auras.SafeText(ns.Auras.SafeField(aura, "spellId") or "nil"),
+      "duration=", ns.Auras.SafeText(ns.Auras.SafeField(aura, "duration") or "nil"),
+      "expiration=", ns.Auras.SafeText(ns.Auras.SafeField(aura, "expirationTime") or "nil"),
+      "applications=", ns.Auras.SafeText(ns.Auras.SafeField(aura, "applications") or "nil")
+    )
+  end
+end
+
 function ArenaDebuffs:Debug()
   self:ApplySettings()
 
   local settings = ns.GetSettings("arenaDebuffs")
+  local cacheGUIDs, cachedAuras = CountCachedAuras()
   local lines = {
     ns.displayName .. " arena debug",
     "enabled: " .. tostring(settings.enabled),
@@ -375,7 +670,21 @@ function ArenaDebuffs:Debug()
     "onlyPlayer: " .. tostring(settings.onlyPlayer),
     "dots category: " .. tostring(ns.GetCategories().dots),
     "utility category: " .. tostring(ns.GetCategories().utility),
+    "cache GUIDs: " .. tostring(cacheGUIDs),
+    "cached auras: " .. tostring(cachedAuras),
+    "combat log seen: " .. tostring(cacheStats.seen),
+    "combat log tracked: " .. tostring(cacheStats.tracked),
+    "combat log removed: " .. tostring(cacheStats.removed),
+    "restricted GUID keys: " .. tostring(cacheStats.restrictedGUID),
+    "combat log ignored source: " .. tostring(cacheStats.ignoredSource),
+    "combat log ignored aura type: " .. tostring(cacheStats.ignoredAuraType),
+    "combat log ignored spell: " .. tostring(cacheStats.ignoredSpell),
+    "trace:",
   }
+
+  for _, entry in ipairs(traceLog) do
+    lines[#lines + 1] = "  " .. entry
+  end
 
   for index = 1, 5 do
     local unit = "arena" .. index
@@ -387,6 +696,7 @@ function ArenaDebuffs:Debug()
     AppendLine(lines, "UnitExists:", tostring(UnitExists(unit)))
     if UnitExists(unit) then
       AppendLine(lines, "UnitCanAttack:", tostring(UnitCanAttack and UnitCanAttack("player", unit)))
+      DescribeCachedAuras(lines, unit)
       DumpFrameInfo(lines, "frame tree", frame, 0)
       DumpFrameInfo(lines, "auras tree", frame and frame.AurasFrame, 0)
     end
