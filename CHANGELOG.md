@@ -7,7 +7,8 @@
 - Added saved settings, slash commands, and a Blizzard options panel.
 - Added friendly raid/group frame aura overlays.
 - Added friendly nameplate aura overlays.
-- Kept enemy nameplate and arena debuff support in development pending combat-log based tracking.
+- Kept enemy nameplate debuff support in development pending combat-log based tracking.
+- Removed arena support from the shipping branch while experimental arena work continues separately.
 
 ## 0.1
 

@@ -7,7 +7,6 @@ Working files:
 - [Frames.lua](Frames.lua)
 - [Config.lua](Config.lua)
 - [Modules/RaidHots.lua](Modules/RaidHots.lua)
-- [Modules/ArenaDebuffs.lua](Modules/ArenaDebuffs.lua)
 - [Modules/NameplateDebuffs.lua](Modules/NameplateDebuffs.lua)
 
 ## What currently works
@@ -32,15 +31,11 @@ Fix:
 - Track auras by destination GUID + spell ID.
 - Render only spells that belong to the player and are in the tracked lists.
 
-### 2. Arena frames have the same enemy-frame limitation
+### 2. Arena work is parked off main
 
-Arena was also relying on Blizzard aura buttons, which is not precise enough
-for restricted PvP aura identities.
-
-Fix:
-
-- Use the same combat-log cache for arena enemy frames.
-- Keep the arena renderer separate from friendly raid/nameplate code.
+Arena support was removed from the shipping branch after protected-frame
+blocking during testing. The experimental combat-log cache work is preserved
+on the `arena-module-wip` branch.
 
 ### 3. Restricted aura matching caused noise
 
@@ -66,15 +61,14 @@ The remaining work is to define enemy-frame behavior explicitly:
 
 - exact tracked spells
 - per-module toggles
-- whether a spell belongs on nameplates, arena, or both
+- whether a spell belongs on nameplates or future enemy-frame modules
 
 ## Recommended next implementation step
 
 1. Add a small combat-log cache module.
 2. Record player-cast aura applications/removals by GUID.
 3. Feed that cache into enemy nameplate rendering.
-4. Reuse the same cache for arena frames.
-5. Keep friendly raid/nameplate code unchanged unless a bug shows up.
+4. Keep friendly raid/nameplate code unchanged unless a bug shows up.
 
 ## Last known good behavior
 

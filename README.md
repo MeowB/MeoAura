@@ -1,6 +1,6 @@
 # Meo Aura
 
-Meo Aura is a World of Warcraft addon that adds custom aura overlays to Blizzard raid, arena, and nameplate frames.
+Meo Aura is a World of Warcraft addon that adds custom aura overlays to Blizzard raid and nameplate frames.
 
 The current development build is `0.2-dev`. Friendly raid and nameplate overlays are usable; enemy-frame tracking is still being redesigned so it can rely on exact player-cast aura data.
 
@@ -29,7 +29,6 @@ The addon manifest is [MeoAura.toc](MeoAura.toc), and the root folder is now str
 - [Frames.lua](Frames.lua): frame safety checks and aura overlay rendering.
 - [Config.lua](Config.lua): Blizzard options panel.
 - [Modules/RaidHots.lua](Modules/RaidHots.lua): compact party/raid HoT overlays.
-- [Modules/ArenaDebuffs.lua](Modules/ArenaDebuffs.lua): arena enemy debuff overlays.
 - [Modules/NameplateDebuffs.lua](Modules/NameplateDebuffs.lua): nameplate debuff overlays.
 - [archive/0.1](archive/0.1): preserved legacy `MeoRaidHots` version `0.1` snapshot.
 - [docs/assets](docs/assets): reference images and documentation assets.
@@ -40,9 +39,7 @@ The addon manifest is [MeoAura.toc](MeoAura.toc), and the root folder is now str
 - `/meo status`: print module status.
 - `/meo debug`: run raid-frame debug output.
 - `/meo debug nameplate`: dump visible nameplate frame/unit/aura diagnostics as a Lua error popup.
-- `/meo debug arena`: dump arena frame/unit/aura diagnostics plus target/focus/mouseover fallback scans.
 - `/meo raid on|off`: toggle raid HoTs.
-- `/meo arena on|off`: toggle arena debuffs.
 - `/meo nameplate on|off`: toggle nameplate debuffs.
 - `/meo nameplate size 40`: force nameplate debuff icon size for visual testing.
 - `/meo nameplate count 8`: set visible nameplate aura slots.

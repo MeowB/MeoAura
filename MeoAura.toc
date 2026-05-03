@@ -1,6 +1,6 @@
 ## Interface: 120001
 ## Title: Meo Aura
-## Notes: Custom aura overlays for Blizzard raid, arena, and nameplate frames
+## Notes: Custom aura overlays for Blizzard raid and nameplate frames
 ## Version: 0.2-dev
 ## SavedVariables: MeoAuraDB
 
@@ -9,5 +9,4 @@ Auras.lua
 Frames.lua
 Config.lua
 Modules/RaidHots.lua
-Modules/ArenaDebuffs.lua
 Modules/NameplateDebuffs.lua

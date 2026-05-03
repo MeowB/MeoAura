@@ -30,7 +30,6 @@ function RaidHots:UpdateFrame(unitFrame)
   if not ns.GetSettings("raidHots").enabled then
     return
   end
-  ns.Trace("RaidHots UpdateFrame " .. ns.Frames.SafeName(unitFrame))
 
   if not ns.Frames.IsCompactGroupFrame(unitFrame) then
     return
@@ -40,14 +39,12 @@ function RaidHots:UpdateFrame(unitFrame)
 end
 
 function RaidHots:UpdateAll()
-  ns.Trace("RaidHots UpdateAll")
   ns.Frames.ForEachCompactGroupFrame(function(unitFrame)
     self:UpdateFrame(unitFrame)
   end)
 end
 
 function RaidHots:QueueUpdateAll()
-  ns.Trace("RaidHots QueueUpdateAll")
   if updateQueued then
     return
   end
@@ -60,9 +57,7 @@ function RaidHots:QueueUpdateAll()
 end
 
 function RaidHots:OnLogin()
-  ns.Trace("RaidHots OnLogin enabled=" .. tostring(ns.GetSettings("raidHots").enabled))
   if not ns.GetSettings("raidHots").enabled then
-    ns.Trace("RaidHots OnLogin disabled")
     return
   end
 
@@ -90,7 +85,6 @@ function RaidHots:OnLogin()
 end
 
 function RaidHots:ApplySettings()
-  ns.Trace("RaidHots ApplySettings")
   if not ns.GetSettings("raidHots").enabled then
     return
   end
@@ -99,7 +93,6 @@ function RaidHots:ApplySettings()
 end
 
 function RaidHots:GROUP_ROSTER_UPDATE()
-  ns.Trace("RaidHots GROUP_ROSTER_UPDATE")
   if not ns.GetSettings("raidHots").enabled then
     return
   end
@@ -108,7 +101,6 @@ function RaidHots:GROUP_ROSTER_UPDATE()
 end
 
 function RaidHots:UNIT_AURA(unit)
-  ns.Trace("RaidHots UNIT_AURA " .. tostring(unit))
   if not ns.GetSettings("raidHots").enabled then
     return
   end

@@ -7,7 +7,6 @@ local panel
 
 local MODULE_LABELS = {
   raidHots = "Raid HoTs",
-  arenaDebuffs = "Arena debuffs",
   nameplateDebuffs = "Nameplate debuffs",
   nameplateHots = "Friendly nameplate HoTs",
 }
@@ -22,7 +21,6 @@ local CATEGORY_LABELS = {
 local SECTION_DESCRIPTIONS = {
   raid = "Show your tracked HoTs, externals, and utility buffs on Blizzard party and raid frames.",
   nameplates = "Tune enemy nameplate debuffs separately from your helpful buffs on friendly nameplates.",
-  arena = "Experimental enemy arena aura display while the combat-log tracker is still being rebuilt.",
   categories = "Choose which tracked aura groups are eligible for the enabled modules.",
 }
 
@@ -182,16 +180,11 @@ function Config:Create()
   CreateCheckbox(panel, "nameplateHots", 16, -396)
   CreateSlider(panel, "nameplateHots", 32, -432, "Friendly buff icon size")
 
-  CreateSection(panel, "Arena Frames", SECTION_DESCRIPTIONS.arena, 360, -52)
-  CreateCheckbox(panel, "arenaDebuffs", 360, -100)
-  CreateSlider(panel, "arenaDebuffs", 376, -136, "Arena debuff icon size")
-  CreateCooldownTextCheckbox(panel, "arenaDebuffs", 376, -170)
-
-  CreateSection(panel, "Aura Categories", SECTION_DESCRIPTIONS.categories, 360, -246)
-  CreateCategoryCheckbox(panel, "hots", 360, -294)
-  CreateCategoryCheckbox(panel, "dots", 360, -326)
-  CreateCategoryCheckbox(panel, "externals", 360, -358)
-  CreateCategoryCheckbox(panel, "utility", 360, -390)
+  CreateSection(panel, "Aura Categories", SECTION_DESCRIPTIONS.categories, 360, -52)
+  CreateCategoryCheckbox(panel, "hots", 360, -100)
+  CreateCategoryCheckbox(panel, "dots", 360, -132)
+  CreateCategoryCheckbox(panel, "externals", 360, -164)
+  CreateCategoryCheckbox(panel, "utility", 360, -196)
   CreateSaveButton(panel)
 
   panel:SetScript("OnShow", function(self)

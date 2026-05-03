@@ -96,7 +96,6 @@ local function NameplateModuleActive()
 end
 
 local function RenderFriendlyNameplateAuras(unitFrame, unit)
-  ns.Trace("Nameplates RenderFriendly " .. tostring(unit))
   if FriendlyNameplateHotsEnabled() then
     SetBlizzardAurasShown(unitFrame, false)
     ns.Frames.RenderAuras("nameplateDebuffs", unitFrame, unit, GetFriendlyHotOptions())
@@ -147,7 +146,6 @@ local function FindUnitForNamePlate(namePlate, unitFrame)
 end
 
 function SetBlizzardAurasShown(unitFrame, shown)
-  ns.Trace("Nameplates SetBlizzardAurasShown " .. ns.Frames.SafeName(unitFrame) .. " " .. tostring(shown))
 end
 
 local function IsCooldownFrame(frame)
@@ -271,7 +269,6 @@ local function StyleNativeAuraButton(button, size)
 end
 
 local function StyleNativeAuraButtons(unitFrame)
-  ns.Trace("Nameplates StyleNativeAuraButtons " .. ns.Frames.SafeName(unitFrame))
   local settings = ns.GetSettings("nameplateDebuffs")
   local auraFrame = unitFrame and unitFrame.AurasFrame
   if not auraFrame then
@@ -554,7 +551,6 @@ function ReplayNativeCooldown(unitFrame, iconIndex, aura, cooldown, unit)
 end
 
 local function RenderNameplateAuras(unitFrame, unit)
-  ns.Trace("Nameplates RenderNameplateAuras " .. tostring(unit) .. " " .. ns.Frames.SafeName(unitFrame))
   if not NameplateModuleActive() then
     return
   end
@@ -574,7 +570,6 @@ local function RenderNameplateAuras(unitFrame, unit)
 end
 
 function ScheduleStyle(unitFrame, unit)
-  ns.Trace("Nameplates ScheduleStyle " .. tostring(unit) .. " " .. ns.Frames.SafeName(unitFrame))
   unit = unit or unitsByFrame[unitFrame] or ns.Frames.GetUnit(unitFrame)
 
   RenderNameplateAuras(unitFrame, unit)
@@ -590,7 +585,6 @@ function ScheduleStyle(unitFrame, unit)
 end
 
 function NameplateDebuffs:UpdateUnit(unit)
-  ns.Trace("Nameplates UpdateUnit " .. tostring(unit))
   if not NameplateModuleActive() then
     return
   end
@@ -617,7 +611,6 @@ function NameplateDebuffs:UpdateUnit(unit)
 end
 
 function NameplateDebuffs:ClearUnit(unit)
-  ns.Trace("Nameplates ClearUnit " .. tostring(unit))
   if not NameplateModuleActive() then
     framesByUnit[unit] = nil
     return
@@ -633,9 +626,7 @@ function NameplateDebuffs:ClearUnit(unit)
 end
 
 function NameplateDebuffs:OnLogin()
-  ns.Trace("Nameplates OnLogin debuffs=" .. tostring(ns.GetSettings("nameplateDebuffs").enabled) .. " hots=" .. tostring(ns.GetSettings("nameplateHots").enabled))
   if not NameplateModuleActive() then
-    ns.Trace("Nameplates OnLogin disabled")
     return
   end
 
@@ -654,7 +645,6 @@ function NameplateDebuffs:OnLogin()
 end
 
 function NameplateDebuffs:ApplySettings()
-  ns.Trace("Nameplates ApplySettings")
   if not NameplateModuleActive() then
     return
   end
@@ -666,7 +656,6 @@ function NameplateDebuffs:ApplySettings()
   for _, namePlate in ipairs(C_NamePlate.GetNamePlates()) do
     local unitFrame = namePlate.UnitFrame or namePlate
     local unit = FindUnitForNamePlate(namePlate, unitFrame)
-    ns.Trace("Nameplates ApplySettings plate " .. tostring(unit) .. " " .. ns.Frames.SafeName(unitFrame))
     if unit then
       self:UpdateUnit(unit)
     elseif not ns.GetSettings("nameplateDebuffs").enabled and not FriendlyNameplateHotsEnabled() then
